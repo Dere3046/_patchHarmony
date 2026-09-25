@@ -4,7 +4,7 @@ KDIR := $(KDIR)
 MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 ODIR := $(MDIR)/out/$(VER)
 
-DEPS := Type_info KernCall HooKern hidemod
+DEPS := Type_info KernCall HooKern
 include $(MDIR)/mk/deps.mk
 
 # KallRecon and Type_info ship the same slide.o twice, keep Type_info's copy only
