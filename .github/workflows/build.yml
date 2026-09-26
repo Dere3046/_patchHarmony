@@ -1,0 +1,54 @@
+name: Build GKI
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'compat/**'
+      - 'Makefile'
+      - 'mk/**'
+      - 'deps.lst'
+      - 'scripts/fetch-deps.sh'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+jobs:
+  build-matrix:
+    strategy:
+      matrix:
+        kmi:
+          - android15-6.6
+          - android16-6.12
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260313
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch deps
+        env:
+          KMSDK_TOKEN: ${{ secrets.KMSDK_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
+          scripts/fetch-deps.sh
+
+      - name: Build ${{ matrix.kmi }}
+        run: |
+          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          tail -5 build.log
+
+      - name: Zero warning gate
+        run: |
+          if grep -nE "error:|warning:" build.log; then
+            echo "build log is not clean"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: droid_lkm-${{ matrix.kmi }}
+          path: |
+            out/${{ matrix.kmi }}/droid_lkm.ko
+            out/${{ matrix.kmi }}/droid_lkm_compat.ko
+          if-no-files-found: error
