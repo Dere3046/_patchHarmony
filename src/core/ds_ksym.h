@@ -27,6 +27,9 @@ struct sembuf;
 struct filename;
 struct mq_attr;
 struct sigevent;
+struct vfsmount;
+struct fs_context;
+struct mnt_idmap;
 
 struct droid_lkm_ksym {
 
@@ -83,6 +86,21 @@ struct droid_lkm_ksym {
 
 
 	void (*switch_task_namespaces)(struct task_struct *p, struct nsproxy *new);
+
+	/*
+	 * mqueue vfs helpers. exported by the kernel the module links against,
+	 * trimmed from some GKI kernels by TRIM_UNUSED_KSYMS, so they resolve at
+	 * load time like the rest of the table.
+	 */
+	int (*inode_permission)(struct mnt_idmap *idmap, struct inode *inode,
+				int mask);
+	int (*mnt_want_write)(struct vfsmount *mnt);
+	void (*mnt_drop_write)(struct vfsmount *mnt);
+	struct dentry *(*lookup_one_len)(const char *name, struct dentry *base,
+					 int len);
+	int (*get_tree_nodev)(struct fs_context *fc,
+			      int (*fill_super)(struct super_block *sb,
+						struct fs_context *fc));
 
 
 	int (*security_ipc_permission)(struct kern_ipc_perm *ipcp, short flag);

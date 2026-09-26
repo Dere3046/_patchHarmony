@@ -30,6 +30,7 @@
 #include <linux/signal.h>
 
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include "ds_nsops.h"
@@ -745,12 +746,13 @@ void droid_lkm_pidns_exit(void)
 		list_del_init(&e->node);
 		spin_unlock_irqrestore(&droid_lkm_pidns_lock, flags);
 
-		if (e->ns->ns.stashed || refcount_read(&e->ns->ns.count) > 1 ||
+		if (droid_lkm_ns_stashed(&e->ns->ns) ||
+		    refcount_read(&e->ns->ns.count) > 1 ||
 		    !idr_is_empty(&e->ns->idr)) {
 
 
 			droid_lkm_warn("pidns %p neutralized+leaked (stashed=%p count=%d)\n",
-				e->ns, e->ns->ns.stashed,
+				e->ns, droid_lkm_ns_stash_ptr(&e->ns->ns),
 				refcount_read(&e->ns->ns.count));
 			e->ns->child_reaper = droid_lkm_pidns_retire_reaper;
 			droid_lkm_ns_neutralize(&e->ns->ns, droid_lkm_pidns_neutral_ops);

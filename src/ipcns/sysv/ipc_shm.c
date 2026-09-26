@@ -26,6 +26,7 @@
  */
 
 #include <linux/slab.h>
+#include "ds_compat.h"
 #include "ds_ipc_compat.h"
 #include "ds_ipcns.h"
 #include <linux/mm.h>
@@ -669,7 +670,7 @@ static const struct file_operations shm_file_operations_huge = {
 	.get_unmapped_area	= shm_get_unmapped_area,
 	.llseek		= noop_llseek,
 	.fallocate	= shm_fallocate,
-	.fop_flags	= FOP_HUGE_PAGES,
+	DROID_LKM_SHM_HUGE_FOP
 };
 
 static const struct vm_operations_struct shm_vm_ops = {

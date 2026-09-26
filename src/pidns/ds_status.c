@@ -18,8 +18,8 @@
 #include "hk_inline.h"
 
 static void (*droid_lkm_seq_puts_fn)(struct seq_file *m, const char *s);
-static void (*droid_lkm_seq_write_fn)(struct seq_file *m, const void *p,
-				      size_t size);
+static int (*droid_lkm_seq_write_fn)(struct seq_file *m, const void *p,
+				     size_t size);
 static void (*droid_lkm_seq_putc_fn)(struct seq_file *m, char c);
 static void (*droid_lkm_seq_dec_fn)(struct seq_file *m, const char *delimiter,
 				    unsigned long long num);

@@ -5,6 +5,7 @@
  */
 
 #include <linux/spinlock.h>
+#include "ds_compat.h"
 #include "ds_ipc_compat.h"
 #include <linux/init.h>
 #include <linux/security.h>
@@ -43,13 +44,11 @@ struct msg_msgseg {
 #define DATALEN_MSG	((size_t)PAGE_SIZE-sizeof(struct msg_msg))
 #define DATALEN_SEG	((size_t)PAGE_SIZE-sizeof(struct msg_msgseg))
 
-static kmem_buckets *msg_buckets __ro_after_init;
+static droid_lkm_msg_bucket_t *msg_buckets __ro_after_init;
 
 static int init_msg_buckets(void)
 {
-	msg_buckets = kmem_buckets_create("msg_msg", SLAB_ACCOUNT,
-					  sizeof(struct msg_msg),
-					  DATALEN_MSG, NULL);
+	msg_buckets = droid_lkm_msg_bucket_create();
 
 	return 0;
 }
@@ -66,7 +65,7 @@ static struct msg_msg *alloc_msg(size_t len)
 	size_t alen;
 
 	alen = min(len, DATALEN_MSG);
-	msg = kmem_buckets_alloc(msg_buckets, sizeof(*msg) + alen, GFP_KERNEL);
+	msg = droid_lkm_msg_alloc(msg_buckets, sizeof(*msg) + alen);
 	if (msg == NULL)
 		return NULL;
 

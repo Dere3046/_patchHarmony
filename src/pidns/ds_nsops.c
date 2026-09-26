@@ -17,6 +17,7 @@
 #include <linux/user_namespace.h>
 
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_nsops.h"
 
 struct droid_lkm_ns_ops_alias {
@@ -186,7 +187,7 @@ int droid_lkm_ns_ops_host_init(void)
 		return -ENOMEM;
 	}
 
-	ns->stashed = NULL;
+	droid_lkm_ns_stash_clear(ns);
 	ns->inum = PROC_PID_INIT_INO;
 	refcount_set(&ns->count, DROID_LKM_NS_LEAK_REFCOUNT);
 

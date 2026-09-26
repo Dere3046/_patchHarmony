@@ -19,6 +19,7 @@
 #include <linux/uidgid.h>
 
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include "ipc_util.h"
@@ -45,7 +46,7 @@ static int droid_lkm_sysctl_one = 1;
 static int droid_lkm_sysctl_int_max = INT_MAX;
 static int droid_lkm_sysctl_mni;
 
-static int droid_lkm_ipc_dointvec_minmax_orphans(const struct ctl_table *table,
+static int droid_lkm_ipc_dointvec_minmax_orphans(DROID_LKM_CTL_TABLE *table,
 						 int write, void *buffer,
 						 size_t *lenp, loff_t *ppos)
 {
@@ -61,7 +62,7 @@ static int droid_lkm_ipc_dointvec_minmax_orphans(const struct ctl_table *table,
 	return err;
 }
 
-static int droid_lkm_ipc_auto_msgmni(const struct ctl_table *table, int write,
+static int droid_lkm_ipc_auto_msgmni(DROID_LKM_CTL_TABLE *table, int write,
 				     void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ctl_table ipc_table;
@@ -76,7 +77,7 @@ static int droid_lkm_ipc_auto_msgmni(const struct ctl_table *table, int write,
 	return proc_dointvec_minmax(&ipc_table, write, buffer, lenp, ppos);
 }
 
-static int droid_lkm_ipc_sem_dointvec(const struct ctl_table *table, int write,
+static int droid_lkm_ipc_sem_dointvec(DROID_LKM_CTL_TABLE *table, int write,
 				      void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ipc_namespace *ns =
@@ -194,7 +195,7 @@ static void droid_lkm_ipc_set_ownership(struct ctl_table_header *head,
 }
 
 static int droid_lkm_ipc_permissions(struct ctl_table_header *head,
-				     const struct ctl_table *table)
+				     DROID_LKM_CTL_TABLE *table)
 {
 	int mode = table->mode;
 	kuid_t ns_root_uid;
@@ -212,10 +213,26 @@ static int droid_lkm_ipc_permissions(struct ctl_table_header *head,
 	return (mode << 6) | (mode << 3) | mode;
 }
 
+/*
+ * 6.6 passes the table to ctl_table_root::set_ownership, 6.12 does not. adapt
+ * the 6.12 shaped handler to the signature the build kernel expects.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+#define DROID_LKM_IPC_SET_OWNERSHIP	droid_lkm_ipc_set_ownership
+#else
+static void droid_lkm_ipc_set_ownership_compat(struct ctl_table_header *head,
+					       struct ctl_table *table,
+					       kuid_t *uid, kgid_t *gid)
+{
+	droid_lkm_ipc_set_ownership(head, uid, gid);
+}
+#define DROID_LKM_IPC_SET_OWNERSHIP	droid_lkm_ipc_set_ownership_compat
+#endif
+
 static struct ctl_table_root droid_lkm_ipc_set_root = {
 	.lookup		= droid_lkm_ipc_set_lookup,
 	.permissions	= droid_lkm_ipc_permissions,
-	.set_ownership	= droid_lkm_ipc_set_ownership,
+	.set_ownership	= DROID_LKM_IPC_SET_OWNERSHIP,
 };
 
 bool droid_lkm_ipc_sysctls_setup(struct ipc_namespace *ns)

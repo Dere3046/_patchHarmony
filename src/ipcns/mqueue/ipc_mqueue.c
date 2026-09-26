@@ -44,6 +44,7 @@
 
 #include <net/sock.h>
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_ipc_compat.h"
 #include "ds_ipcns.h"
 #include "ipc_util.h"
@@ -1102,20 +1103,20 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
 	audit_mq_sendrecv(mqdes, msg_len, msg_prio, ts);
 
 	f = fdget(mqdes);
-	if (unlikely(!fd_file(f))) {
+	if (unlikely(!droid_lkm_fd_file(f))) {
 		ret = -EBADF;
 		goto out;
 	}
 
-	inode = file_inode(fd_file(f));
-	if (unlikely(fd_file(f)->f_op != &mqueue_file_operations)) {
+	inode = file_inode(droid_lkm_fd_file(f));
+	if (unlikely(droid_lkm_fd_file(f)->f_op != &mqueue_file_operations)) {
 		ret = -EBADF;
 		goto out_fput;
 	}
 	info = MQUEUE_I(inode);
-	audit_file(fd_file(f));
+	audit_file(droid_lkm_fd_file(f));
 
-	if (unlikely(!(fd_file(f)->f_mode & FMODE_WRITE))) {
+	if (unlikely(!(droid_lkm_fd_file(f)->f_mode & FMODE_WRITE))) {
 		ret = -EBADF;
 		goto out_fput;
 	}
@@ -1155,7 +1156,7 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
 	}
 
 	if (info->attr.mq_curmsgs == info->attr.mq_maxmsg) {
-		if (fd_file(f)->f_flags & O_NONBLOCK) {
+		if (droid_lkm_fd_file(f)->f_flags & O_NONBLOCK) {
 			ret = -EAGAIN;
 		} else {
 			wait.task = current;
@@ -1216,20 +1217,20 @@ static int do_mq_timedreceive(mqd_t mqdes, char __user *u_msg_ptr,
 	audit_mq_sendrecv(mqdes, msg_len, 0, ts);
 
 	f = fdget(mqdes);
-	if (unlikely(!fd_file(f))) {
+	if (unlikely(!droid_lkm_fd_file(f))) {
 		ret = -EBADF;
 		goto out;
 	}
 
-	inode = file_inode(fd_file(f));
-	if (unlikely(fd_file(f)->f_op != &mqueue_file_operations)) {
+	inode = file_inode(droid_lkm_fd_file(f));
+	if (unlikely(droid_lkm_fd_file(f)->f_op != &mqueue_file_operations)) {
 		ret = -EBADF;
 		goto out_fput;
 	}
 	info = MQUEUE_I(inode);
-	audit_file(fd_file(f));
+	audit_file(droid_lkm_fd_file(f));
 
-	if (unlikely(!(fd_file(f)->f_mode & FMODE_READ))) {
+	if (unlikely(!(droid_lkm_fd_file(f)->f_mode & FMODE_READ))) {
 		ret = -EBADF;
 		goto out_fput;
 	}
@@ -1259,7 +1260,7 @@ static int do_mq_timedreceive(mqd_t mqdes, char __user *u_msg_ptr,
 	}
 
 	if (info->attr.mq_curmsgs == 0) {
-		if (fd_file(f)->f_flags & O_NONBLOCK) {
+		if (droid_lkm_fd_file(f)->f_flags & O_NONBLOCK) {
 			spin_unlock(&info->lock);
 			ret = -EAGAIN;
 		} else {
@@ -1372,11 +1373,11 @@ static int do_mq_notify(mqd_t mqdes, const struct sigevent *notification)
 			/* and attach it to the socket */
 retry:
 			f = fdget(notification->sigev_signo);
-			if (!fd_file(f)) {
+			if (!droid_lkm_fd_file(f)) {
 				ret = -EBADF;
 				goto out;
 			}
-			sock = netlink_getsockbyfilp(fd_file(f));
+			sock = netlink_getsockbyfilp(droid_lkm_fd_file(f));
 			fdput(f);
 			if (IS_ERR(sock)) {
 				ret = PTR_ERR(sock);
@@ -1395,13 +1396,13 @@ retry:
 	}
 
 	f = fdget(mqdes);
-	if (!fd_file(f)) {
+	if (!droid_lkm_fd_file(f)) {
 		ret = -EBADF;
 		goto out;
 	}
 
-	inode = file_inode(fd_file(f));
-	if (unlikely(fd_file(f)->f_op != &mqueue_file_operations)) {
+	inode = file_inode(droid_lkm_fd_file(f));
+	if (unlikely(droid_lkm_fd_file(f)->f_op != &mqueue_file_operations)) {
 		ret = -EBADF;
 		goto out_fput;
 	}
@@ -1476,31 +1477,31 @@ static int do_mq_getsetattr(int mqdes, struct mq_attr *new, struct mq_attr *old)
 		return -EINVAL;
 
 	f = fdget(mqdes);
-	if (!fd_file(f))
+	if (!droid_lkm_fd_file(f))
 		return -EBADF;
 
-	if (unlikely(fd_file(f)->f_op != &mqueue_file_operations)) {
+	if (unlikely(droid_lkm_fd_file(f)->f_op != &mqueue_file_operations)) {
 		fdput(f);
 		return -EBADF;
 	}
 
-	inode = file_inode(fd_file(f));
+	inode = file_inode(droid_lkm_fd_file(f));
 	info = MQUEUE_I(inode);
 
 	spin_lock(&info->lock);
 
 	if (old) {
 		*old = info->attr;
-		old->mq_flags = fd_file(f)->f_flags & O_NONBLOCK;
+		old->mq_flags = droid_lkm_fd_file(f)->f_flags & O_NONBLOCK;
 	}
 	if (new) {
 		audit_mq_getsetattr(mqdes, new);
-		spin_lock(&fd_file(f)->f_lock);
+		spin_lock(&droid_lkm_fd_file(f)->f_lock);
 		if (new->mq_flags & O_NONBLOCK)
-			fd_file(f)->f_flags |= O_NONBLOCK;
+			droid_lkm_fd_file(f)->f_flags |= O_NONBLOCK;
 		else
-			fd_file(f)->f_flags &= ~O_NONBLOCK;
-		spin_unlock(&fd_file(f)->f_lock);
+			droid_lkm_fd_file(f)->f_flags &= ~O_NONBLOCK;
+		spin_unlock(&droid_lkm_fd_file(f)->f_lock);
 
 		inode_set_atime_to_ts(inode, inode_set_ctime_current(inode));
 	}

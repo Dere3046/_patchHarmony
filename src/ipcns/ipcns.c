@@ -23,6 +23,7 @@
 #include <linux/mutex.h>
 
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include "ipc_sysctl.h"
@@ -404,11 +405,12 @@ void droid_lkm_ipcns_exit(void)
 			continue;
 		}
 
-		if (e->ns->ns.stashed || refcount_read(&e->ns->ns.count) > 1 ||
+		if (droid_lkm_ns_stashed(&e->ns->ns) ||
+		    refcount_read(&e->ns->ns.count) > 1 ||
 		    droid_lkm_ipcns_in_use(e->ns)) {
 			
 			droid_lkm_warn("ipcns %p neutralized+leaked (stashed=%p count=%d in_use=%d)\n",
-				e->ns, e->ns->ns.stashed,
+				e->ns, droid_lkm_ns_stash_ptr(&e->ns->ns),
 				refcount_read(&e->ns->ns.count),
 				droid_lkm_ipcns_in_use(e->ns) ? 1 : 0);
 			droid_lkm_ns_neutralize(&e->ns->ns, droid_lkm_ipcns_neutral_ops);

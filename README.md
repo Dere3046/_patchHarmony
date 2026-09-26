@@ -46,6 +46,8 @@ the DDK container and writes both modules plus their build tree into
 `out/<target>/`. library sources are never committed here, `deps.lst` pins the
 exact revision of each one.
 
+`android15-6.6` is a supported target as well, same modules and features.
+
 ## usage
 
 	insmod droid_lkm.ko

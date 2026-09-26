@@ -60,6 +60,16 @@ int droid_lkm_ksym_init(void)
 		 typeof(droid_lkm_ks.do_vmi_align_munmap));
 	DROID_LKM_THUNK(switch_task_namespaces, "switch_task_namespaces",
 		 typeof(droid_lkm_ks.switch_task_namespaces));
+	DROID_LKM_THUNK(inode_permission, "inode_permission",
+		 typeof(droid_lkm_ks.inode_permission));
+	DROID_LKM_THUNK(mnt_want_write, "mnt_want_write",
+		 typeof(droid_lkm_ks.mnt_want_write));
+	DROID_LKM_THUNK(mnt_drop_write, "mnt_drop_write",
+		 typeof(droid_lkm_ks.mnt_drop_write));
+	DROID_LKM_THUNK(lookup_one_len, "lookup_one_len",
+		 typeof(droid_lkm_ks.lookup_one_len));
+	DROID_LKM_THUNK(get_tree_nodev, "get_tree_nodev",
+		 typeof(droid_lkm_ks.get_tree_nodev));
 
 	DROID_LKM_THUNK(security_ipc_permission, "security_ipc_permission",
 		 typeof(droid_lkm_ks.security_ipc_permission));

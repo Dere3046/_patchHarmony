@@ -16,12 +16,14 @@
 #include <linux/mmap_lock.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
 #include <linux/ipc.h>
 #include <linux/msg.h>
 #include <linux/sem.h>
 #include <uapi/linux/mman.h>
 
 #include "ds.h"
+#include "ds_compat.h"
 #include "ds_ksym.h"
 
 void wake_q_add(struct wake_q_head *head, struct task_struct *task)
@@ -107,16 +109,62 @@ int __mm_populate(unsigned long addr, unsigned long len, int ignore_errors)
 	return droid_lkm_ks.__mm_populate(addr, len, ignore_errors);
 }
 
-int do_vmi_align_munmap(struct vma_iterator *vmi, struct vm_area_struct *vma,
-			struct mm_struct *mm, unsigned long start,
-			unsigned long end, struct list_head *uf, bool unlock)
+/*
+ * a static kernel symbol that is never address taken carries no KCFI preamble,
+ * so an indirect call to it always trips the type check. the 6.6
+ * do_vmi_align_munmap is such a symbol while the 6.12 one is not, so this shim
+ * opts out of the check. the prototype below matches mm/mmap.c (6.6) and
+ * mm/vma.c (6.12).
+ */
+__nocfi int do_vmi_align_munmap(struct vma_iterator *vmi,
+				struct vm_area_struct *vma,
+				struct mm_struct *mm, unsigned long start,
+				unsigned long end, struct list_head *uf,
+				bool unlock)
 {
 	if (!droid_lkm_ks.do_vmi_align_munmap)
 		return -ENOSYS;
 	return droid_lkm_ks.do_vmi_align_munmap(vmi, vma, mm, start, end, uf, unlock);
 }
 
+int inode_permission(struct mnt_idmap *idmap, struct inode *inode, int mask)
+{
+	if (!droid_lkm_ks.inode_permission)
+		return -ENOSYS;
+	return droid_lkm_ks.inode_permission(idmap, inode, mask);
+}
 
+int mnt_want_write(struct vfsmount *mnt)
+{
+	if (!droid_lkm_ks.mnt_want_write)
+		return -ENOSYS;
+	return droid_lkm_ks.mnt_want_write(mnt);
+}
+
+void mnt_drop_write(struct vfsmount *mnt)
+{
+	if (droid_lkm_ks.mnt_drop_write)
+		droid_lkm_ks.mnt_drop_write(mnt);
+}
+
+struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
+{
+	if (!droid_lkm_ks.lookup_one_len)
+		return ERR_PTR(-ENOSYS);
+	return droid_lkm_ks.lookup_one_len(name, base, len);
+}
+
+int get_tree_nodev(struct fs_context *fc,
+		   int (*fill_super)(struct super_block *sb,
+				     struct fs_context *fc))
+{
+	if (!droid_lkm_ks.get_tree_nodev)
+		return -ENOSYS;
+	return droid_lkm_ks.get_tree_nodev(fc, fill_super);
+}
+
+
+#ifdef CONFIG_SLAB_BUCKETS
 kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
 				  unsigned int useroffset,
 				  unsigned int usersize,
@@ -124,6 +172,7 @@ kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
 {
 	return NULL;
 }
+#endif
 
 
 // missing int hooks fall back to 0 as the kernel does without CONFIG_SECURITY
