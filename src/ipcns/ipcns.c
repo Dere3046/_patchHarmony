@@ -23,6 +23,7 @@
 #include <linux/mutex.h>
 
 #include "ds.h"
+#include "ds_caps.h"
 #include "ds_compat.h"
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
@@ -49,6 +50,8 @@ static inline refcount_t *droid_lkm_ipcns_refcount(struct ipc_namespace *ns)
 struct droid_lkm_ipcns_entry {
 	struct list_head node;
 	struct ipc_namespace *ns;
+	/* the kernel allocated it, so the kernel frees it: this module only tracks it */
+	bool kernel_owned;
 };
 
 static LIST_HEAD(droid_lkm_ipcns_list);
@@ -57,10 +60,8 @@ static DEFINE_SPINLOCK(droid_lkm_ipcns_lock);
 
 static struct ipc_namespace *droid_lkm_ipcns_host;
 static struct ipc_namespace *droid_lkm_ipcns_orig;
-#ifdef CONFIG_IPC_NS
-/* the kernel owns ipc namespaces in this build, see create() */
+/* set when the running kernel owns ipc namespaces, see the classification in ds_caps.c */
 static bool droid_lkm_ipcns_kernel_owned;
-#endif
 
 
 static const struct proc_ns_operations *droid_lkm_ipcns_neutral_ops;
@@ -100,15 +101,64 @@ __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
 
 #ifdef CONFIG_IPC_NS
 	/*
-	 * this kernel allocates, refcounts and frees ipc namespaces itself, and a
-	 * namespace of ours has no ucounts for its free_ipc_ns(). asking the kernel
-	 * for one through copy_ipcs() and then filling in the sysv state is not
-	 * safe either: the state is already initialized there, and reinitializing
-	 * it trips __list_add_valid inside msg_init_ns (see the 6.1 run of
-	 * out/qemu-v9-android14-6.1.log). refuse cleanly instead.
+	 * a kernel that owns ipc namespaces already knows how to build one: it takes
+	 * the ucount, allocates the inum, sets ns->ops and mounts mqueuefs into it,
+	 * and its own free_ipc_ns() releases every bit of that. fabricating the
+	 * object instead leaves it without ucounts and outside the kernel's free
+	 * path, which is why the namespace is asked of the kernel and only the half
+	 * it skips is filled in. that half is SysV, skipped while CONFIG_SYSVIPC is
+	 * off in the trees that need this module
 	 */
-	if (droid_lkm_ipcns_kernel_owned)
-		return ERR_PTR(-EOPNOTSUPP);
+	if (droid_lkm_ipcns_kernel_owned) {
+		if (!droid_lkm_ks.copy_ipcs || !droid_lkm_ks.put_ipc_ns)
+			return ERR_PTR(-EOPNOTSUPP);
+
+		ns = droid_lkm_ks.copy_ipcs(CLONE_NEWIPC, current_user_ns(),
+					    droid_lkm_ipcns_current());
+		if (IS_ERR(ns))
+			return ns;
+
+		if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
+			err = msg_init_ns(ns);
+			if (err)
+				goto out_kernel_ns;
+			sem_init_ns(ns);
+			shm_init_ns(ns);
+		}
+
+		if (droid_lkm_ipc_sysctls_ok() && !droid_lkm_ipc_sysctls_setup(ns)) {
+			droid_lkm_warn("ipcns %p: sysctls required but registration failed\n",
+				       ns);
+			err = -ENOMEM;
+			goto out_kernel_sysctl;
+		}
+
+		e = kzalloc(sizeof(*e), GFP_KERNEL);
+		if (!e) {
+			err = -ENOMEM;
+			goto out_kernel_sysctl;
+		}
+		e->ns = ns;
+		e->kernel_owned = true;
+		INIT_LIST_HEAD(&e->node);
+
+		/* the list outlives the caller's reference, so it holds its own */
+		get_ipc_ns(ns);
+
+		spin_lock_irq(&droid_lkm_ipcns_lock);
+		list_add_tail(&e->node, &droid_lkm_ipcns_list);
+		spin_unlock_irq(&droid_lkm_ipcns_lock);
+
+		droid_lkm_info("ipcns %p the kernel made, sysv=%s filled in\n", ns,
+			       droid_lkm_caps.sysvipc.reason);
+		return ns;
+
+out_kernel_sysctl:
+		droid_lkm_ipc_sysctls_retire(ns);
+out_kernel_ns:
+		droid_lkm_ks.put_ipc_ns(ns);
+		return ERR_PTR(err);
+	}
 #endif
 
 	ns = kzalloc(sizeof(*ns), GFP_KERNEL_ACCOUNT);
@@ -399,7 +449,15 @@ int droid_lkm_ipcns_init(void)
 		droid_lkm_ipcns_exit();
 		return -ENODATA;
 	}
-#ifdef CONFIG_IPC_NS
+	/*
+	 * whether this kernel has ipc namespace wiring is a property of the running
+	 * kernel, not of the config this module was built with: stock GKI turns it
+	 * on, the device trees turn it off. a preprocessor choice puts us on the
+	 * adopt branch there, where the field may not even exist, so the answer
+	 * comes from the classification in ds_caps.c, which probes the image for
+	 * ipcns_operations
+	 */
+	if (droid_lkm_caps.ipc_ns.owner == DROID_LKM_KERNEL) {
 	/*
 	 * the kernel's own init ipc namespace is the one every task already
 	 * points at, so serve it rather than install a substitute. only the sysv
@@ -415,20 +473,35 @@ int droid_lkm_ipcns_init(void)
 		droid_lkm_ipcns_exit();
 		return -ENODATA;
 	}
-	msg_init_ns(droid_lkm_ipcns_host);
-	sem_init_ns(droid_lkm_ipcns_host);
-	shm_init_ns(droid_lkm_ipcns_host);
+	/*
+	 * only the half the kernel did not build, and only when the module is the
+	 * one serving it: with SYSVIPC on the kernel ran
+	 * msg_init_ns/sem_init_ns/shm_init_ns over this namespace at boot, and
+	 * initialising an ids array twice trips __list_add_valid
+	 */
+	if (droid_lkm_caps.sysvipc.owner != DROID_LKM_KERNEL) {
+		msg_init_ns(droid_lkm_ipcns_host);
+		sem_init_ns(droid_lkm_ipcns_host);
+		shm_init_ns(droid_lkm_ipcns_host);
+	}
 	if (droid_lkm_mqueue_ready() &&
 	    droid_lkm_mq_init_ns(droid_lkm_ipcns_host))
 		droid_lkm_warn("host ipcns: mqueue mount failed, POSIX mqueue stays off\n");
 	droid_lkm_ipcns_init_entry.ns = droid_lkm_ipcns_host;
-	droid_lkm_info("host ipcns %p is the kernel's own, sysv state adopted\n",
-		       droid_lkm_ipcns_host);
-#else
-	droid_lkm_ipcns_orig = droid_lkm_init_nsproxy->ipc_ns;
-	droid_lkm_init_nsproxy->ipc_ns = droid_lkm_ipcns_host;
-	droid_lkm_info("host ipcns %p installed into init_nsproxy\n", droid_lkm_ipcns_host);
-#endif
+	droid_lkm_info("host ipcns %p is the kernel's own, sysv=%s mqueue=%s\n",
+		       droid_lkm_ipcns_host,
+		       droid_lkm_owner_name(droid_lkm_caps.sysvipc.owner),
+		       droid_lkm_owner_name(droid_lkm_caps.posix_mqueue.owner));
+	} else {
+		/*
+		 * no ipc namespace in this kernel, so there is no field to install into
+		 * either: the nsproxy pointers are laid out for the namespaces the tree
+		 * enabled, and writing the slot ipc_ns would land on a neighbour. the
+		 * module serves its own namespace out of its own tables
+		 */
+		droid_lkm_info("host ipcns %p served by the module, the kernel has no ipc namespace\n",
+			       droid_lkm_ipcns_host);
+	}
 
 	droid_lkm_ipc_sysctls_init();
 	return 0;
@@ -445,7 +518,8 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 
 	droid_lkm_ipc_sysctls_exit();
 
-	if (droid_lkm_init_nsproxy && droid_lkm_ipcns_is_ours(droid_lkm_init_nsproxy->ipc_ns))
+	if (droid_lkm_caps.ipc_ns.owner == DROID_LKM_KERNEL && droid_lkm_init_nsproxy &&
+	    droid_lkm_ipcns_is_ours(droid_lkm_init_nsproxy->ipc_ns))
 		droid_lkm_init_nsproxy->ipc_ns = droid_lkm_ipcns_orig;
 	droid_lkm_reset_task_ns_refs();
 
@@ -462,6 +536,17 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 		spin_unlock_irqrestore(&droid_lkm_ipcns_lock, flags);
 
 		droid_lkm_ipc_sysctls_retire(e->ns);
+
+		/*
+		 * the kernel allocated this one and the kernel frees it, sysv ids
+		 * included, so the only thing to release here is the reference the
+		 * list holds
+		 */
+		if (e->kernel_owned) {
+			droid_lkm_ks.put_ipc_ns(e->ns);
+			kfree(e);
+			continue;
+		}
 
 		if (e == &droid_lkm_ipcns_init_entry || droid_lkm_ipcns_is_host(e->ns)) {
 			

@@ -330,6 +330,26 @@ static int droid_lkm_ipc_attach(unsigned long *tab, int nr, unsigned long fn,
 	return 0;
 }
 
+/*
+ * a row is wired only by the owner of its feature. SysV is the case with a
+ * twist: the module steps aside only when the running kernel serves the whole
+ * stack, because a kernel whose SysV runs against its own ipc namespaces cannot
+ * isolate a container the module put in a namespace of its own
+ */
+static bool droid_lkm_ipc_row_skipped(const struct droid_lkm_ipc_slot *s)
+{
+	if (s->needs_mqueue)
+		return !droid_lkm_mqueue_ready();
+	return droid_lkm_caps.sysvipc.owner == DROID_LKM_KERNEL &&
+	       droid_lkm_caps.ipc_ns.owner == DROID_LKM_KERNEL;
+}
+
+static const char *droid_lkm_ipc_row_reason(const struct droid_lkm_ipc_slot *s)
+{
+	return s->needs_mqueue ? droid_lkm_caps.posix_mqueue.reason
+			       : droid_lkm_caps.sysvipc.reason;
+}
+
 static void droid_lkm_slot_patch_ipc_compat(void)
 {
 	int patched = 0, i;
@@ -345,9 +365,9 @@ static void droid_lkm_slot_patch_ipc_compat(void)
 				       s->name);
 			continue;
 		}
-		if (s->needs_mqueue && !droid_lkm_mqueue_ready()) {
-			droid_lkm_dbg("skip compat %s: mqueue not ready\n",
-				      s->name);
+		if (droid_lkm_ipc_row_skipped(s)) {
+			droid_lkm_dbg("skip compat %s: %s\n", s->name,
+				      droid_lkm_ipc_row_reason(s));
 			continue;
 		}
 		if (droid_lkm_ipc_attach(droid_lkm_compat_sys_call_table, s->nr32,
@@ -364,7 +384,7 @@ static void droid_lkm_slot_patch_ipc_compat(void)
 
 static int droid_lkm_slot_patch_ipc(void)
 {
-	int patched = 0, i;
+	int patched = 0, skipped = 0, i;
 
 	if (droid_lkm_skip_sysvipc) {
 		droid_lkm_info("skip_sysvipc=1, leave kernel entries alone\n");
@@ -374,8 +394,10 @@ static int droid_lkm_slot_patch_ipc(void)
 	for (i = 0; i < ARRAY_SIZE(droid_lkm_ipc_slots); i++) {
 		const struct droid_lkm_ipc_slot *s = &droid_lkm_ipc_slots[i];
 
-		if (s->needs_mqueue && !droid_lkm_mqueue_ready()) {
-			droid_lkm_warn("skip %s: mqueue not ready\n", s->name);
+		if (droid_lkm_ipc_row_skipped(s)) {
+			droid_lkm_dbg("skip %s: %s\n", s->name,
+				      droid_lkm_ipc_row_reason(s));
+			skipped++;
 			continue;
 		}
 		if (droid_lkm_ipc_attach(droid_lkm_sys_call_table, s->nr,
@@ -385,12 +407,19 @@ static int droid_lkm_slot_patch_ipc(void)
 		patched++;
 	}
 
-	droid_lkm_info("ipc syscalls wired: %d/%zu\n", patched,
-		ARRAY_SIZE(droid_lkm_ipc_slots));
+	droid_lkm_info("ipc syscalls wired: %d/%zu, %d left to the running kernel\n",
+		patched, ARRAY_SIZE(droid_lkm_ipc_slots), skipped);
 
 	droid_lkm_slot_patch_ipc_compat();
 
-	return patched ? 0 : -ENODATA;
+	/*
+	 * a kernel that owns both families leaves nothing to take over, which is a
+	 * complete answer and not a failed install: only a module that owns rows and
+	 * cannot attach any of them has to refuse the load
+	 */
+	if (!patched && !skipped)
+		return -ENODATA;
+	return 0;
 }
 
 #define DROID_LKM_NS_FLAGS                                                            \
@@ -684,6 +713,7 @@ static long droid_lkm_sys_unshare(const struct pt_regs *regs)
 	if (!(flags & (CLONE_NEWPID | CLONE_NEWIPC | CLONE_SYSVSEM)))
 		return droid_lkm_orig_unshare(regs);
 
+
 	if (!droid_lkm_gate_allow()) {
 		droid_lkm_dbg("unshare: %s[%d] flags=0x%lx NOT ours -> kernel\n",
 		       current->comm, current->pid, flags);
@@ -831,7 +861,7 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 	ctx->save_ipc = (unsigned long)ctx->priv->ipc_ns;
 	if (want_pid)
 		ctx->priv->pid_ns_for_children = new_pid;
-	if (want_ipc)
+	if (want_ipc && new_ipc)
 		ctx->priv->ipc_ns = new_ipc;
 	return 0;
 }

@@ -16,6 +16,7 @@
 #include "ds_caps.h"
 #include "ds_ksym.h"
 #include "ds_ipc_compat.h"
+#include "ds_ipcns.h"
 
 #define DROID_LKM_TASK_IPC_BITS 8
 
@@ -138,7 +139,7 @@ bool droid_lkm_task_ipc_exit_defer(struct task_struct *tsk)
 	e = droid_lkm_task_ipc_find_locked(tsk);
 	if (e && !e->defer_queued) {
 		e->defer_queued = true;
-		e->exit_ns = tsk->nsproxy ? tsk->nsproxy->ipc_ns : NULL;
+		e->exit_ns = droid_lkm_ipcns_task_ns(tsk);
 		queued = true;
 	}
 	spin_unlock(&droid_lkm_task_ipc_lock);

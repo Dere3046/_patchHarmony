@@ -24,9 +24,9 @@ static const struct hk_cfg dlc_hk_cfg = {
 };
 
 bool dlc_inline_hooks_on;
-static bool dlc_inline_hook;
+static bool dlc_inline_hook = true;
 module_param_named(inline_hook, dlc_inline_hook, bool, 0444);
-MODULE_PARM_DESC(inline_hook, "install inline hooks, off by default");
+MODULE_PARM_DESC(inline_hook, "install inline hooks, on by default");
 
 static int __init droid_lkm_compat_init(void)
 {
@@ -43,6 +43,11 @@ static int __init droid_lkm_compat_init(void)
 		pr_err("[droid_lkm_compat] hk_init failed: %d\n", ret);
 		return ret;
 	}
+
+	/* the vendor fixup is the inline hook, so the policy travels with it */
+	dlc_inline_hooks_on = dlc_inline_hook;
+	pr_info("[droid_lkm_compat] hook policy: inline_hook=%d\n",
+		dlc_inline_hooks_on);
 
 	dlc_ghost_init();
 

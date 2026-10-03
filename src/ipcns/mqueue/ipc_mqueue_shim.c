@@ -269,15 +269,27 @@ __nocfi noinline int droid_lkm_mqueue_shim_init(void)
 		return -ENODATA;
 	}
 
-#ifdef CONFIG_POSIX_MQUEUE
 	/*
-	 * a kernel that builds POSIX mqueue owns mqueuefs, the fs/mqueue sysctls
-	 * and the six syscall slots, and registering our table next to the
-	 * kernel's fails with a duplicate entry. leave all of it to the kernel.
+	 * whether the kernel serves POSIX mqueue is asked of the running kernel,
+	 * never of the config this module was built with: the DDK
+	 * android14-6.1 kdir carries CONFIG_POSIX_MQUEUE=y while the 6.1 device
+	 * kernel has it off, so a compile time branch leaves that device with
+	 * neither the kernel's mqueue nor ours. a kernel that serves mq_open owns
+	 * mqueuefs, the fs/mqueue sysctls and the six syscall slots, and
+	 * registering our table next to its own fails on a duplicate entry
 	 */
-	droid_lkm_info("POSIX mqueue is the kernel's (CONFIG_POSIX_MQUEUE), module mqueue stays off\n");
-	return -ENODATA;
-#endif
+	if (droid_lkm_caps.posix_mqueue.owner == DROID_LKM_KERNEL) {
+		droid_lkm_info("POSIX mqueue is the running kernel's (%s), module mqueue stays off\n",
+			       droid_lkm_caps.posix_mqueue.reason);
+		return -ENODATA;
+	}
+	if (droid_lkm_caps.posix_mqueue.owner != DROID_LKM_MODULE) {
+		droid_lkm_info("mqueue stays off: %s\n",
+			       droid_lkm_caps.posix_mqueue.reason);
+		return -ENODATA;
+	}
+	droid_lkm_info("POSIX mqueue: %s, installing the module port\n",
+		       droid_lkm_caps.posix_mqueue.reason);
 
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_getname, "getname");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_putname, "putname");
@@ -323,13 +335,24 @@ __nocfi noinline int droid_lkm_mqueue_shim_init(void)
 		droid_lkm_warn("mqueue: RLIMIT_MSGQUEUE accounting unavailable, queues not charged\n");
 
 	droid_lkm_mqueue_shim_ok = true;
-	droid_lkm_info("mqueue shim ready (12 unexported VFS/netlink/timer helpers resolved)\n");
+	droid_lkm_dbg("mqueue shim: 12 unexported VFS/netlink/timer helpers resolved\n");
 	return 0;
 }
 
 bool droid_lkm_mqueue_ready(void)
 {
 	return droid_lkm_mqueue_shim_ok;
+}
+
+/*
+ * the filesystem registration is the ownership test, and it runs after this
+ * shim has already claimed readiness: a kernel whose own mqueuefs holds the
+ * name serves POSIX mqueue itself, so the claim is retracted before the syscall
+ * slots are wired
+ */
+void droid_lkm_mqueue_shim_retract(void)
+{
+	droid_lkm_mqueue_shim_ok = false;
 }
 
 /*

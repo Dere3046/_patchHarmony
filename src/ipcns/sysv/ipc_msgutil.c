@@ -37,14 +37,14 @@ struct ipc_namespace init_ipc_ns = {
 #endif
 	.user_ns = &init_user_ns,
 	.ns.inum = PROC_IPC_INIT_INO,
-#ifdef CONFIG_IPC_NS
 	/*
 	 * the kernel's own ipcns_operations is unexported, and the module hands
 	 * the host ipc namespace its own operations at load time anyway, so
-	 * start from those instead of linking a symbol the image may not carry
+	 * start from those instead of linking a symbol the image may not carry.
+	 * ns_common carries ops and inum on every branch, the assignment does not
+	 * depend on the running kernel having ipc namespaces
 	 */
 	.ns.ops = &droid_lkm_ipcns_ops,
-#endif
 };
 
 struct msg_msgseg {

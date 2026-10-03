@@ -137,6 +137,7 @@ void droid_lkm_mq_kill_sb(struct super_block *sb);
 
 int droid_lkm_mqueue_shim_init(void);
 bool droid_lkm_mqueue_ready(void);
+void droid_lkm_mqueue_shim_retract(void);
 
 
 #define DROID_LKM_DFLT_QUEUESMAX	256

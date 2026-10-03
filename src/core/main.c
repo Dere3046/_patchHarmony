@@ -129,6 +129,12 @@ static int __init droid_lkm_init(void)
 		droid_lkm_err("hk_init failed: %d\n", ret);
 		return ret;
 	}
+	/*
+	 * the policy has to reach the engine before the first hook: leaving this
+	 * out keeps droid_lkm_inline_hooks_on at its zero initialised value and
+	 * silently disables every inline hook, the nsproxy one included
+	 */
+	droid_lkm_hook_policy_apply();
 
 	ret = droid_lkm_pidns_init();
 	if (ret)
@@ -141,10 +147,13 @@ static int __init droid_lkm_init(void)
 
 
 	if (droid_lkm_mqueue_fs_init()) {
-		droid_lkm_warn("POSIX mqueue disabled (mqueuefs/shim unavailable)\n");
+		droid_lkm_info("POSIX mqueue stays off: %s\n",
+			       droid_lkm_caps.posix_mqueue.reason);
 	} else {
 		droid_lkm_mqueue_fs_up = true;
 	}
+	/* the mqueue owner is settled above, the rest were settled at caps_init */
+	droid_lkm_caps_report_features();
 
 	ret = droid_lkm_slot_init();
 	if (ret)

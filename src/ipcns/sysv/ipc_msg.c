@@ -42,7 +42,10 @@
 #include <linux/nsproxy.h>
 #include <linux/ipc_namespace.h>
 #include <linux/rhashtable.h>
-#include <linux/percpu_counter.h>
+#include <linux/atomic.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
+#include <linux/rcupdate.h>
 
 #include <asm/current.h>
 #include <linux/uaccess.h>
@@ -55,93 +58,122 @@
  * struct. both branches account the same bytes and headers, so MSG_INFO
  * reports real numbers everywhere and the counters stay per namespace.
  */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-
-static inline int droid_lkm_msg_acct_init(struct ipc_namespace *ns)
-{
-	int ret;
-
-	ret = percpu_counter_init(&ns->percpu_msg_bytes, 0, GFP_KERNEL);
-	if (ret)
-		return ret;
-	ret = percpu_counter_init(&ns->percpu_msg_hdrs, 0, GFP_KERNEL);
-	if (ret)
-		percpu_counter_destroy(&ns->percpu_msg_bytes);
-	return ret;
-}
-
-static inline void droid_lkm_msg_acct_exit(struct ipc_namespace *ns)
-{
-	percpu_counter_destroy(&ns->percpu_msg_bytes);
-	percpu_counter_destroy(&ns->percpu_msg_hdrs);
-}
-
-static inline void droid_lkm_msg_acct_bytes(struct ipc_namespace *ns, long bytes)
-{
-	percpu_counter_add_local(&ns->percpu_msg_bytes, bytes);
-}
-
-static inline void droid_lkm_msg_acct_hdrs(struct ipc_namespace *ns, long hdrs)
-{
-	percpu_counter_add_local(&ns->percpu_msg_hdrs, hdrs);
-}
-
-static inline long droid_lkm_msg_acct_bytes_read(struct ipc_namespace *ns)
-{
-	return percpu_counter_sum(&ns->percpu_msg_bytes);
-}
-
-static inline long droid_lkm_msg_acct_hdrs_read(struct ipc_namespace *ns)
-{
-	return percpu_counter_sum(&ns->percpu_msg_hdrs);
-}
-
-#else /* < 6.1 */
-
 /*
- * the counters are per namespace here too, one pair per struct ipc_namespace,
- * and the calls sit under the same locks, so plain atomics account exactly what
- * the percpu counters account on the newer branches.
+ * per namespace message accounting, owned by this module. the kernel's
+ * ipc_namespace carries percpu counters from 6.1 and atomic ones before it, but
+ * every one of those offsets comes from the headers this module was built with.
+ * a device kernel whose struct differs then makes the kernel write through an
+ * offset that is not mapped, which is a level 3 translation fault inside
+ * percpu_counter_init on 6.1.118. keeping the counters here means no kernel
+ * struct offset is assumed anywhere in this file
  */
+struct droid_lkm_msg_acct {
+	struct list_head list;
+	struct ipc_namespace *ns;
+	atomic64_t bytes;
+	atomic64_t hdrs;
+};
 
-static inline int droid_lkm_msg_acct_init(struct ipc_namespace *ns)
+static LIST_HEAD(droid_lkm_msg_acct_list);
+static DEFINE_MUTEX(droid_lkm_msg_acct_lock);
+
+static struct droid_lkm_msg_acct *droid_lkm_msg_acct_get(struct ipc_namespace *ns)
 {
-	atomic_set(&ns->msg_bytes, 0);
-	atomic_set(&ns->msg_hdrs, 0);
+	struct droid_lkm_msg_acct *a;
+
+	list_for_each_entry(a, &droid_lkm_msg_acct_list, list)
+		if (a->ns == ns)
+			return a;
+	return NULL;
+}
+
+static int droid_lkm_msg_acct_init(struct ipc_namespace *ns)
+{
+	struct droid_lkm_msg_acct *a;
+
+	if (!ns)
+		return -EINVAL;
+	a = kzalloc(sizeof(*a), GFP_KERNEL);
+	if (!a)
+		return -ENOMEM;
+	a->ns = ns;
+	atomic64_set(&a->bytes, 0);
+	atomic64_set(&a->hdrs, 0);
+	mutex_lock(&droid_lkm_msg_acct_lock);
+	if (droid_lkm_msg_acct_get(ns)) {
+		mutex_unlock(&droid_lkm_msg_acct_lock);
+		kfree(a);
+		return 0;
+	}
+	list_add_rcu(&a->list, &droid_lkm_msg_acct_list);
+	mutex_unlock(&droid_lkm_msg_acct_lock);
 	return 0;
 }
 
-static inline void droid_lkm_msg_acct_exit(struct ipc_namespace *ns)
+static void droid_lkm_msg_acct_exit(struct ipc_namespace *ns)
 {
+	struct droid_lkm_msg_acct *a;
+
+	mutex_lock(&droid_lkm_msg_acct_lock);
+	a = droid_lkm_msg_acct_get(ns);
+	if (a) {
+		list_del_rcu(&a->list);
+		synchronize_rcu();
+		kfree(a);
+	}
+	mutex_unlock(&droid_lkm_msg_acct_lock);
 }
 
-static inline void droid_lkm_msg_acct_bytes(struct ipc_namespace *ns, long bytes)
+static void droid_lkm_msg_acct_add(struct ipc_namespace *ns, long bytes, long hdrs)
 {
-	if (bytes < 0)
-		atomic_sub(-bytes, &ns->msg_bytes);
-	else
-		atomic_add(bytes, &ns->msg_bytes);
+	struct droid_lkm_msg_acct *a;
+	unsigned long irq;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(a, &droid_lkm_msg_acct_list, list) {
+		if (a->ns != ns)
+			continue;
+		local_irq_save(irq);
+		atomic64_add(bytes, &a->bytes);
+		atomic64_add(hdrs, &a->hdrs);
+		local_irq_restore(irq);
+		break;
+	}
+	rcu_read_unlock();
 }
 
-static inline void droid_lkm_msg_acct_hdrs(struct ipc_namespace *ns, long hdrs)
+static void droid_lkm_msg_acct_bytes(struct ipc_namespace *ns, long bytes)
 {
-	if (hdrs < 0)
-		atomic_dec(&ns->msg_hdrs);
-	else
-		atomic_inc(&ns->msg_hdrs);
+	droid_lkm_msg_acct_add(ns, bytes, 0);
 }
 
-static inline long droid_lkm_msg_acct_bytes_read(struct ipc_namespace *ns)
+static void droid_lkm_msg_acct_hdrs(struct ipc_namespace *ns, long hdrs)
 {
-	return atomic_read(&ns->msg_bytes);
+	droid_lkm_msg_acct_add(ns, 0, hdrs);
 }
 
-static inline long droid_lkm_msg_acct_hdrs_read(struct ipc_namespace *ns)
+static long droid_lkm_msg_acct_read(struct ipc_namespace *ns, bool bytes)
 {
-	return atomic_read(&ns->msg_hdrs);
+	struct droid_lkm_msg_acct *a;
+	long v = 0;
+
+	rcu_read_lock();
+	a = droid_lkm_msg_acct_get(ns);
+	if (a)
+		v = (long)atomic64_read(bytes ? &a->bytes : &a->hdrs);
+	rcu_read_unlock();
+	return v;
 }
 
-#endif /* < 6.1 */
+static long droid_lkm_msg_acct_bytes_read(struct ipc_namespace *ns)
+{
+	return droid_lkm_msg_acct_read(ns, true);
+}
+
+static long droid_lkm_msg_acct_hdrs_read(struct ipc_namespace *ns)
+{
+	return droid_lkm_msg_acct_read(ns, false);
+}
 
 /* one msq_queue structure for each present queue on the system */
 struct msg_queue {
@@ -1418,16 +1450,6 @@ int msg_init_ns(struct ipc_namespace *ns)
 	ipc_init_ids(&ns->ids[IPC_MSG_IDS]);
 	return 0;
 }
-
-#ifdef CONFIG_IPC_NS
-void msg_exit_ns(struct ipc_namespace *ns)
-{
-	free_ipcs(ns, &msg_ids(ns), freeque);
-	idr_destroy(&ns->ids[IPC_MSG_IDS].ipcs_idr);
-	rhashtable_destroy(&ns->ids[IPC_MSG_IDS].key_ht);
-	droid_lkm_msg_acct_exit(ns);
-}
-#endif
 
 #ifdef CONFIG_PROC_FS
 static int sysvipc_msg_proc_show(struct seq_file *s, void *it)

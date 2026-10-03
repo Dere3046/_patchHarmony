@@ -195,15 +195,6 @@ static void do_shm_rmid(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp)
 		shm_destroy(ns, shp);
 }
 
-#ifdef CONFIG_IPC_NS
-void shm_exit_ns(struct ipc_namespace *ns)
-{
-	free_ipcs(ns, &shm_ids(ns), do_shm_rmid);
-	idr_destroy(&ns->ids[IPC_SHM_IDS].ipcs_idr);
-	rhashtable_destroy(&ns->ids[IPC_SHM_IDS].key_ht);
-}
-#endif
-
 void shm_init(void)
 {
 	ipc_init_proc_interface("sysvipc/shm",

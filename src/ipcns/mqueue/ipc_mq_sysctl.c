@@ -26,6 +26,7 @@
 #include "ds_compat.h"
 #include "ipc_util.h"
 #include "ipc_sysctl.h"
+#include "ds_ipcns.h"
 
 #include "ipc_mqueue_compat.h"
 
@@ -94,12 +95,12 @@ static struct ctl_table mq_sysctls[] = {
 
 static struct ctl_table_set *set_lookup(struct ctl_table_root *root)
 {
-	return &current->nsproxy->ipc_ns->mq_set;
+	return &droid_lkm_ipcns_current()->mq_set;
 }
 
 static int set_is_seen(struct ctl_table_set *set)
 {
-	return &current->nsproxy->ipc_ns->mq_set == set;
+	return &droid_lkm_ipcns_current()->mq_set == set;
 }
 
 static void mq_set_ownership(struct ctl_table_header *head,

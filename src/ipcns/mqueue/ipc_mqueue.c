@@ -464,7 +464,7 @@ static int mqueue_init_fs_context(struct fs_context *fc)
 	if (!ctx)
 		return -ENOMEM;
 
-	ctx->ipc_ns = get_ipc_ns(current->nsproxy->ipc_ns);
+	ctx->ipc_ns = get_ipc_ns(droid_lkm_ipcns_current());
 	put_user_ns(fc->user_ns);
 	fc->user_ns = get_user_ns(ctx->ipc_ns->user_ns);
 	fc->fs_private = ctx;
@@ -584,10 +584,10 @@ static int mqueue_create_attr(struct dentry *dentry, umode_t mode, void *arg)
 	spin_lock(&mq_lock);
 	ipc_ns = __get_ns_from_inode(dir);
 	if (!ipc_ns) {
+		struct ipc_namespace *cur = droid_lkm_ipcns_current();
+
 		droid_lkm_warn("mq create: s_fs_info null dir=%p sb=%p cur_ns=%p mnt=%p\n",
-			       dir, dir->i_sb, current->nsproxy->ipc_ns,
-			       current->nsproxy->ipc_ns ?
-			       current->nsproxy->ipc_ns->mq_mnt : NULL);
+			       dir, dir->i_sb, cur, cur ? cur->mq_mnt : NULL);
 		error = -EACCES;
 		goto out_unlock;
 	}
@@ -908,12 +908,24 @@ static __nocfi noinline int prepare_open(struct dentry *dentry, int oflag, int r
 static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umode_t mode,
 		      struct mq_attr *attr)
 {
-	struct vfsmount *mnt = current->nsproxy->ipc_ns->mq_mnt;
-	struct dentry *root = mnt->mnt_root;
+	struct ipc_namespace *ipc_ns = droid_lkm_ipcns_current();
+	struct vfsmount *mnt;
+	struct dentry *root;
 	struct filename *name;
 	struct path path;
 	int fd, error;
 	int ro;
+
+	/*
+	 * the namespace field is what the running kernel left there: on a kernel
+	 * without ipc namespaces it is never set, so the accessor answers with the
+	 * host namespace the module serves, and a namespace that has no mqueue
+	 * mount is refused rather than dereferenced
+	 */
+	if (!ipc_ns || !ipc_ns->mq_mnt)
+		return -ENODEV;
+	mnt = ipc_ns->mq_mnt;
+	root = mnt->mnt_root;
 
 	audit_mq_open(oflag, mode, attr);
 
@@ -988,8 +1000,12 @@ __nocfi noinline SYSCALL_DEFINE1(mq_unlink, const char __user *, u_name)
 	struct filename *name;
 	struct dentry *dentry;
 	struct inode *inode = NULL;
-	struct ipc_namespace *ipc_ns = current->nsproxy->ipc_ns;
-	struct vfsmount *mnt = ipc_ns->mq_mnt;
+	struct ipc_namespace *ipc_ns = droid_lkm_ipcns_current();
+	struct vfsmount *mnt;
+
+	if (!ipc_ns || !ipc_ns->mq_mnt)
+		return -ENODEV;
+	mnt = ipc_ns->mq_mnt;
 
 	name = getname(u_name);
 	if (IS_ERR(name))
@@ -1751,31 +1767,52 @@ int __init droid_lkm_mqueue_fs_init(void)
 	mqueue_inode_cachep = kmem_cache_create("mqueue_inode_cache",
 				sizeof(struct mqueue_inode_info), 0,
 				SLAB_HWCACHE_ALIGN|SLAB_ACCOUNT, init_once);
-	if (mqueue_inode_cachep == NULL)
+	if (mqueue_inode_cachep == NULL) {
+		/* the calls are wired off the readiness flag, so it cannot stay set */
+		droid_lkm_mqueue_shim_retract();
 		return -ENOMEM;
+	}
 
-	if (!droid_lkm_setup_mq_sysctls(droid_lkm_ipcns_host_ns())) {
-		pr_warn("sysctl registration failed\n");
-		error = -ENOMEM;
+	/*
+	 * registering the filesystem is the ownership test, and it runs before
+	 * anything else of ours is installed: a kernel that serves POSIX mqueue
+	 * registered this name at boot, so the name being taken is that kernel
+	 * answering the question itself. the slot probe in ds_caps.c only has
+	 * symbol names to go on
+	 */
+	error = register_filesystem(&mqueue_fs_type);
+	if (error) {
+		if (error == -EBUSY) {
+			/* the authoritative answer, better than any symbol guess */
+			droid_lkm_caps.posix_mqueue.owner = DROID_LKM_KERNEL;
+			droid_lkm_caps.posix_mqueue.reason = "the running kernel registered the mqueue filesystem itself";
+			droid_lkm_info("mqueue: the running kernel owns the mqueue filesystem, the module port stays off\n");
+			droid_lkm_mqueue_shim_retract();
+			error = -ENODATA;
+		}
 		goto out_kmem;
 	}
 
-	error = register_filesystem(&mqueue_fs_type);
-	if (error)
-		goto out_sysctl;
+	if (!droid_lkm_setup_mq_sysctls(droid_lkm_ipcns_host_ns())) {
+		droid_lkm_warn("mqueue: sysctl registration failed\n");
+		error = -ENOMEM;
+		goto out_filesystem;
+	}
 
 	spin_lock_init(&mq_lock);
 
 	error = droid_lkm_mq_init_ns(droid_lkm_ipcns_host_ns());
 	if (error)
-		goto out_filesystem;
+		goto out_sysctl;
 
+	droid_lkm_info("mqueue shim ready (12 unexported VFS/netlink/timer helpers resolved)\n");
 	return 0;
 
-out_filesystem:
-	unregister_filesystem(&mqueue_fs_type);
 out_sysctl:
 	droid_lkm_retire_mq_sysctls(droid_lkm_ipcns_host_ns());
+out_filesystem:
+	unregister_filesystem(&mqueue_fs_type);
+	droid_lkm_mqueue_shim_retract();
 out_kmem:
 	kmem_cache_destroy(mqueue_inode_cachep);
 	return error;
