@@ -21,7 +21,7 @@ docker run --rm ${TESTARG} \
 	-v "$SRCDIR":/src \
 	-w /src \
 	"$IMAGE" \
-	sh -c 'make clean 2>/dev/null; make VER="$1"' sh "$TARGET"
+	sh -c 'make VER="$1" clean 2>/dev/null; make VER="$1"' sh "$TARGET"
 
 echo "-> ${SRCDIR}/out/${TARGET}"
 find "$SRCDIR/out/${TARGET}" -name "*.ko"
