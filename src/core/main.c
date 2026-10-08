@@ -13,6 +13,7 @@
 #include "hk_patch.h"
 #include "ds.h"
 #include "ds_caps.h"
+#include "ds_ti.h"
 #include "ds_ipcns.h"
 #include "ds_ksym.h"
 #include "ds_pidns.h"
@@ -92,9 +93,6 @@ static struct hk_cfg droid_lkm_hk_cfg = {
 	.write = hk_write_kernel,
 };
 
-
-MODULE_PARM_DESC(inline_hook, "install inline hooks, off by default");
-
 static int __init droid_lkm_init(void)
 {
 	int ret;
@@ -114,6 +112,8 @@ static int __init droid_lkm_init(void)
 	ret = droid_lkm_ksym_init();
 	if (ret)
 		return ret;
+
+	droid_lkm_layout_init();
 
 	ret = droid_lkm_caps_init();
 	if (ret)
@@ -166,6 +166,17 @@ static int __init droid_lkm_init(void)
 	ret = droid_lkm_status_init();
 	if (ret)
 		droid_lkm_warn("NSpid emulation disabled: %d\n", ret);
+
+	/* every install site has run by now, so this is the load's hook verdict */
+	droid_lkm_hook_report();
+	droid_lkm_layout_report();
+
+	// the legacy container path is the state the device crashed in
+	if (!droid_lkm_hook_critical_ok() && !droid_lkm_degrade_enabled()) {
+		droid_lkm_err("a container critical hook did not install, refusing to load: pass degrade=1 to run without it\n");
+		ret = -EOPNOTSUPP;
+		goto err_slot;
+	}
 
 	droid_lkm_info("ready\n");
 	return 0;

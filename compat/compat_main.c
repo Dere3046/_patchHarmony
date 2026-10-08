@@ -49,7 +49,15 @@ static int __init droid_lkm_compat_init(void)
 	pr_info("[droid_lkm_compat] hook policy: inline_hook=%d\n",
 		dlc_inline_hooks_on);
 
-	dlc_ghost_init();
+	// the fixup is why this module exists
+	// a silent miss leaves vendor callers with NULL
+	ret = dlc_ghost_init();
+	if (ret) {
+		pr_err("[droid_lkm_compat] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
+		       ret);
+		hk_exit();
+		return ret;
+	}
 
 #ifdef CONFIG_DROID_LKM_SELFTEST
 	dlc_selftest_init();

@@ -2,20 +2,16 @@ obj-m := droid_lkm.o
 
 KDIR := $(KDIR)
 MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
-ODIR := $(MDIR)/out/$(VER)
+# a missing VER must not point at out/ itself
+# make clean would wipe every target
+ODIR := $(MDIR)/out/$(if $(VER),$(VER),unknown)
 
 DEPS := Type_info KernCall HooKern
 include $(MDIR)/mk/deps.mk
 
-# KallRecon and Type_info ship the same slide.o twice, keep Type_info's copy only
-# (KallRecon core.o pulls slide_init/advance/buf from it)
-DEPS_OBJS_ALL := $(filter-out deps/KallRecon/lib/slide.o,$(DEPS_OBJS_ALL))
+# both ko's link the whole type info reader now
+# the exports that used to collide are gated upstream (CONFIG_TI_MODNAME)
 
-# Type_info: keep port.o (ti_safe_read) and slide.o only, its anchor.o exports
-# ti_anchor_set_modname which collides with the same symbol on the device
-DEPS_OBJS_ALL := $(filter-out deps/Type_info/lib/btf.o \
-	deps/Type_info/lib/query.o deps/Type_info/lib/reg.o deps/Type_info/lib/lib.o \
-	deps/Type_info/lib/anchor.o deps/Type_info/lib/dwarf.o,$(DEPS_OBJS_ALL))
 
 # optional HooKern features we do not use
 DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_lsm.o,$(DEPS_OBJS_ALL))
@@ -126,6 +122,7 @@ droid_lkm-y := src/core/main.o src/core/ds_hook.o \
 	$(MUNMAP_UNIT) \
 	src/core/ds_ksym.o \
 	src/core/ds_caps.o \
+	src/core/ds_ti.o \
 	src/slot/ds_slot.o \
 	src/pidns/pidns.o \
 	src/pidns/ds_nsops.o \

@@ -18,6 +18,11 @@ case $SDKREV in
 	git -C .sdk fetch origin 2>/dev/null || true
 	git -C .sdk checkout "$SDKREV"
 	;;
+*)
+	# anything but a commit id follows the default branch
+	git -C .sdk fetch origin
+	git -C .sdk checkout -q FETCH_HEAD
+	;;
 esac
 
 exec .sdk/scripts/sdk install

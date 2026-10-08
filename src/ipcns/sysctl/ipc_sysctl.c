@@ -20,6 +20,7 @@
 
 #include "ds_caps.h"
 #include "ds.h"
+#include "ds_ti.h"
 #include "ds_compat.h"
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
@@ -55,6 +56,11 @@ static bool droid_lkm_ipc_sysctls_ready;
  * table uses there. from 6.1 on the table is copied per namespace and the
  * pointer is already the right one.
  */
+#define DROID_LKM_NS_FIELD(_ns, _id)                                           \
+	((void *)droid_lkm_layout_ptr((_ns), (_id)))
+#define DROID_LKM_INIT_NS_FIELD(_id)                                           \
+	((void *)((char *)&init_ipc_ns + droid_lkm_layout_off(_id)))
+
 static inline void *droid_lkm_ipc_data(DROID_LKM_CTL_TABLE *table)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
@@ -63,6 +69,14 @@ static inline void *droid_lkm_ipc_data(DROID_LKM_CTL_TABLE *table)
 	return (char *)table->data - (char *)&init_ipc_ns +
 	       (char *)droid_lkm_ipcns_task_ns(current);
 #endif
+}
+
+// namespace from a field pointer through the running kernel offset
+static struct ipc_namespace *droid_lkm_ipc_ns_of(void *field,
+						 enum droid_lkm_field_id id)
+{
+	return (struct ipc_namespace *)((char *)field -
+					droid_lkm_layout_off(id));
 }
 
 /*
@@ -109,7 +123,8 @@ __nocfi noinline static int droid_lkm_ipc_dointvec_minmax_orphans(DROID_LKM_CTL_
 						 size_t *lenp, loff_t *ppos)
 {
 	struct ipc_namespace *ns =
-		container_of(droid_lkm_ipc_data(table), struct ipc_namespace, shm_rmid_forced);
+		droid_lkm_ipc_ns_of(droid_lkm_ipc_data(table),
+				    DROID_LKM_F_IPC_NS_SHM_RMID_FORCED);
 	int err;
 
 	struct ctl_table copy = *table;
@@ -120,7 +135,7 @@ __nocfi noinline static int droid_lkm_ipc_dointvec_minmax_orphans(DROID_LKM_CTL_
 	err = droid_lkm_ks.proc_dointvec_minmax(&copy, write, buffer, lenp, ppos);
 	if (err < 0)
 		return err;
-	if (ns->shm_rmid_forced)
+	if (*(int *)DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_SHM_RMID_FORCED))
 		droid_lkm_shm_destroy_orphaned(ns);
 	return err;
 }
@@ -144,37 +159,51 @@ __nocfi noinline static int droid_lkm_ipc_sem_dointvec(DROID_LKM_CTL_TABLE *tabl
 				      void *buffer, size_t *lenp, loff_t *ppos)
 {
 	struct ipc_namespace *ns =
-		container_of(droid_lkm_ipc_data(table), struct ipc_namespace, sem_ctls);
+		droid_lkm_ipc_ns_of(droid_lkm_ipc_data(table),
+				    DROID_LKM_F_IPC_NS_SEM_CTLS);
 	int ret, semmni;
 
-	semmni = ns->sem_ctls[3];
+	semmni = ((int *)DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_SEM_CTLS))[3];
 	ret = proc_dointvec(table, write, buffer, lenp, ppos);
 	if (!ret)
 		ret = sem_check_semmni(ns);
 	if (ret)
-		ns->sem_ctls[3] = semmni;
+		((int *)DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_SEM_CTLS))[3] = semmni;
 	return ret;
 }
+
+// one field id per table entry in the same order
+static const enum droid_lkm_field_id droid_lkm_ipc_sysctl_fields[] = {
+	DROID_LKM_F_IPC_NS_SHM_CTLMAX,
+	DROID_LKM_F_IPC_NS_SHM_CTLALL,
+	DROID_LKM_F_IPC_NS_SHM_CTLMNI,
+	DROID_LKM_F_IPC_NS_SHM_RMID_FORCED,
+	DROID_LKM_F_IPC_NS_MSG_CTLMAX,
+	DROID_LKM_F_IPC_NS_MSG_CTLMNI,
+	DROID_LKM_FIELD_COUNT,		/* auto_msgmni keeps a NULL data */
+	DROID_LKM_F_IPC_NS_MSG_CTLMNB,
+	DROID_LKM_F_IPC_NS_SEM_CTLS,
+};
 
 static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	{
 		.procname	= "shmmax",
-		.data		= &init_ipc_ns.shm_ctlmax,
-		.maxlen		= sizeof(init_ipc_ns.shm_ctlmax),
+		.data		= NULL,
+		.maxlen		= sizeof(size_t),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOULONGVEC_MINMAX,
 	},
 	{
 		.procname	= "shmall",
-		.data		= &init_ipc_ns.shm_ctlall,
-		.maxlen		= sizeof(init_ipc_ns.shm_ctlall),
+		.data		= NULL,
+		.maxlen		= sizeof(size_t),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOULONGVEC_MINMAX,
 	},
 	{
 		.procname	= "shmmni",
-		.data		= &init_ipc_ns.shm_ctlmni,
-		.maxlen		= sizeof(init_ipc_ns.shm_ctlmni),
+		.data		= NULL,
+		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOINTVEC_MINMAX,
 		.extra1		= &droid_lkm_sysctl_zero,
@@ -182,8 +211,8 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	},
 	{
 		.procname	= "shm_rmid_forced",
-		.data		= &init_ipc_ns.shm_rmid_forced,
-		.maxlen		= sizeof(init_ipc_ns.shm_rmid_forced),
+		.data		= NULL,
+		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= (proc_handler *)droid_lkm_ipc_dointvec_minmax_orphans,
 		.extra1		= &droid_lkm_sysctl_zero,
@@ -191,8 +220,8 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	},
 	{
 		.procname	= "msgmax",
-		.data		= &init_ipc_ns.msg_ctlmax,
-		.maxlen		= sizeof(init_ipc_ns.msg_ctlmax),
+		.data		= NULL,
+		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOINTVEC_MINMAX,
 		.extra1		= &droid_lkm_sysctl_zero,
@@ -200,8 +229,8 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	},
 	{
 		.procname	= "msgmni",
-		.data		= &init_ipc_ns.msg_ctlmni,
-		.maxlen		= sizeof(init_ipc_ns.msg_ctlmni),
+		.data		= NULL,
+		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOINTVEC_MINMAX,
 		.extra1		= &droid_lkm_sysctl_zero,
@@ -218,8 +247,8 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	},
 	{
 		.procname	= "msgmnb",
-		.data		= &init_ipc_ns.msg_ctlmnb,
-		.maxlen		= sizeof(init_ipc_ns.msg_ctlmnb),
+		.data		= NULL,
+		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= DROID_LKM_IPC_DOINTVEC_MINMAX,
 		.extra1		= &droid_lkm_sysctl_zero,
@@ -227,7 +256,7 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 	},
 	{
 		.procname	= "sem",
-		.data		= &init_ipc_ns.sem_ctls,
+		.data		= NULL,
 		.maxlen		= 4 * sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= (proc_handler *)droid_lkm_ipc_sem_dointvec,
@@ -245,25 +274,52 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 
+// ipc_namespace members go through the layout table
+// the 6.12 device crashed on a set pointer built from a build offset
+#define DROID_LKM_NS_IPC_SET(_ns)                                              \
+	((struct ctl_table_set *)droid_lkm_layout_ptr((_ns),                   \
+			DROID_LKM_F_IPC_NS_IPC_SET))
+#define DROID_LKM_NS_IPC_SYSCTLS(_ns)                                          \
+	((struct ctl_table_header **)droid_lkm_layout_ptr((_ns),               \
+			DROID_LKM_F_IPC_NS_IPC_SYSCTLS))
+static bool droid_lkm_ipc_sysctl_fields_ok(void)
+{
+	if (!droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_IPC_SET) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_IPC_SYSCTLS) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_USER_NS) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_SHM_CTLMAX) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_SHM_CTLALL) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_SHM_CTLMNI) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_SHM_RMID_FORCED) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MSG_CTLMAX) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MSG_CTLMNI) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MSG_CTLMNB) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_SEM_CTLS))
+		return false;
+
+	return true;
+}
 
 static struct ctl_table_set *droid_lkm_ipc_set_lookup(struct ctl_table_root *root)
 {
-	return &droid_lkm_ipcns_task_ns(current)->ipc_set;
+	return DROID_LKM_NS_IPC_SET(droid_lkm_ipcns_task_ns(current));
 }
 
 static int droid_lkm_ipc_set_is_seen(struct ctl_table_set *set)
 {
-	return &droid_lkm_ipcns_task_ns(current)->ipc_set == set;
+	return DROID_LKM_NS_IPC_SET(droid_lkm_ipcns_task_ns(current)) == set;
 }
 
 static void droid_lkm_ipc_set_ownership(struct ctl_table_header *head,
 					kuid_t *uid, kgid_t *gid)
 {
 	struct ipc_namespace *ns =
-		container_of(head->set, struct ipc_namespace, ipc_set);
-	
-	kuid_t ns_root_uid = make_kuid(ns->user_ns, 0);
-	kgid_t ns_root_gid = make_kgid(ns->user_ns, 0);
+		(struct ipc_namespace *)((char *)head->set -
+			droid_lkm_layout_off(DROID_LKM_F_IPC_NS_IPC_SET));
+	struct user_namespace *user_ns = *(struct user_namespace **)
+		DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_USER_NS);
+	kuid_t ns_root_uid = make_kuid(user_ns, 0);
+	kgid_t ns_root_gid = make_kgid(user_ns, 0);
 
 	*uid = uid_valid(ns_root_uid) ? ns_root_uid : GLOBAL_ROOT_UID;
 	*gid = gid_valid(ns_root_gid) ? ns_root_gid : GLOBAL_ROOT_GID;
@@ -320,43 +376,37 @@ __nocfi noinline bool droid_lkm_ipc_sysctls_setup(struct ipc_namespace *ns)
 	if (!droid_lkm_ipc_sysctls_ready)
 		return false;
 
-	droid_lkm_setup_sysctl_set_fn(&ns->ipc_set, &droid_lkm_ipc_set_root,
+	if (!droid_lkm_ipc_sysctl_fields_ok()) {
+		droid_lkm_warn("ipc sysctls refused: the running kernel's layout does not place ipc_namespace.ipc_set\n");
+		return false;
+	}
+
+	droid_lkm_setup_sysctl_set_fn(DROID_LKM_NS_IPC_SET(ns),
+				      &droid_lkm_ipc_set_root,
 				      droid_lkm_ipc_set_is_seen);
 
 	tbl = kmemdup(droid_lkm_ipc_sysctls,
 		      DROID_LKM_IPC_SYSCTL_COUNT * sizeof(droid_lkm_ipc_sysctls[0]),
 		      GFP_KERNEL);
 	if (!tbl) {
-		droid_lkm_retire_sysctl_set_fn(&ns->ipc_set);
+		droid_lkm_retire_sysctl_set_fn(DROID_LKM_NS_IPC_SET(ns));
 		return false;
 	}
 
 	for (i = 0; i < DROID_LKM_IPC_SYSCTL_COUNT; i++) {
-		if (tbl[i].data == &init_ipc_ns.shm_ctlmax)
-			tbl[i].data = &ns->shm_ctlmax;
-		else if (tbl[i].data == &init_ipc_ns.shm_ctlall)
-			tbl[i].data = &ns->shm_ctlall;
-		else if (tbl[i].data == &init_ipc_ns.shm_ctlmni)
-			tbl[i].data = &ns->shm_ctlmni;
-		else if (tbl[i].data == &init_ipc_ns.shm_rmid_forced)
-			tbl[i].data = &ns->shm_rmid_forced;
-		else if (tbl[i].data == &init_ipc_ns.msg_ctlmax)
-			tbl[i].data = &ns->msg_ctlmax;
-		else if (tbl[i].data == &init_ipc_ns.msg_ctlmni)
-			tbl[i].data = &ns->msg_ctlmni;
-		else if (tbl[i].data == &init_ipc_ns.msg_ctlmnb)
-			tbl[i].data = &ns->msg_ctlmnb;
-		else if (tbl[i].data == &init_ipc_ns.sem_ctls)
-			tbl[i].data = &ns->sem_ctls;
-		else
-			tbl[i].data = NULL;
+		enum droid_lkm_field_id id = droid_lkm_ipc_sysctl_fields[i];
+
+		if (id == DROID_LKM_FIELD_COUNT)
+			continue;
+		tbl[i].data = DROID_LKM_NS_FIELD(ns, id);
 	}
 
-	ns->ipc_sysctls = droid_lkm_sysctl_register_table(
-		&ns->ipc_set, "kernel", tbl, DROID_LKM_IPC_SYSCTL_COUNT);
-	if (!ns->ipc_sysctls) {
+	*DROID_LKM_NS_IPC_SYSCTLS(ns) = droid_lkm_sysctl_register_table(
+		DROID_LKM_NS_IPC_SET(ns), "kernel", tbl,
+		DROID_LKM_IPC_SYSCTL_COUNT);
+	if (!*DROID_LKM_NS_IPC_SYSCTLS(ns)) {
 		kfree(tbl);
-		droid_lkm_retire_sysctl_set_fn(&ns->ipc_set);
+		droid_lkm_retire_sysctl_set_fn(DROID_LKM_NS_IPC_SET(ns));
 		return false;
 	}
 
@@ -367,13 +417,13 @@ __nocfi noinline void droid_lkm_ipc_sysctls_retire(struct ipc_namespace *ns)
 {
 	const struct ctl_table *tbl;
 
-	if (!ns->ipc_sysctls)
+	if (!*DROID_LKM_NS_IPC_SYSCTLS(ns))
 		return;
 
-	tbl = ns->ipc_sysctls->ctl_table_arg;
-	unregister_sysctl_table(ns->ipc_sysctls);
-	ns->ipc_sysctls = NULL;
-	droid_lkm_retire_sysctl_set_fn(&ns->ipc_set);
+	tbl = (*DROID_LKM_NS_IPC_SYSCTLS(ns))->ctl_table_arg;
+	unregister_sysctl_table(*DROID_LKM_NS_IPC_SYSCTLS(ns));
+	*DROID_LKM_NS_IPC_SYSCTLS(ns) = NULL;
+	droid_lkm_retire_sysctl_set_fn(DROID_LKM_NS_IPC_SET(ns));
 	kfree(tbl);
 }
 

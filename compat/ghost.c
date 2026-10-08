@@ -14,9 +14,13 @@
 #include <linux/preempt.h>
 #include <linux/threads.h>
 
+#include <linux/threads.h>
+
 #include "core.h"
 #include "ghost.h"
 #include "hk_inline.h"
+#include "type_info.h"
+#include <linux/btf.h>
 
 #define DLC_GHOST_TASK_COMM	"ghost-task-sentinel"
 #define DLC_GHOST_LOG_MAX	3
@@ -109,51 +113,185 @@ __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 	return task;
 }
 
+enum {
+	DLC_GHOST_F_PID,
+	DLC_GHOST_F_TGID,
+	DLC_GHOST_F_COMM,
+	DLC_GHOST_F_USAGE,
+	DLC_GHOST_F_TASKS,
+	DLC_GHOST_F_CHILDREN,
+	DLC_GHOST_F_SIBLING,
+	DLC_GHOST_F_THREAD_NODE,
+	DLC_GHOST_F_PTRACED,
+	DLC_GHOST_F_PTRACE_ENTRY,
+	DLC_GHOST_F_COUNT
+};
+
+static const char *const dlc_ghost_fields[DLC_GHOST_F_COUNT] = {
+	[DLC_GHOST_F_PID] = "pid",
+	[DLC_GHOST_F_TGID] = "tgid",
+	[DLC_GHOST_F_COMM] = "comm",
+	[DLC_GHOST_F_USAGE] = "usage",
+	[DLC_GHOST_F_TASKS] = "tasks",
+	[DLC_GHOST_F_CHILDREN] = "children",
+	[DLC_GHOST_F_SIBLING] = "sibling",
+	[DLC_GHOST_F_THREAD_NODE] = "thread_node",
+	[DLC_GHOST_F_PTRACED] = "ptraced",
+	[DLC_GHOST_F_PTRACE_ENTRY] = "ptrace_entry",
+};
+
+static u32 dlc_ghost_offs[DLC_GHOST_F_COUNT];
+static u32 dlc_ghost_size;
+
+// offsets come from the running kernel BTF
+// a build offset would write pid or comm into whatever the kernel keeps there
+static int dlc_ghost_layout(void)
+{
+	struct ti_resolver res = { .name_to_addr = dlc_ghost_sym };
+	u32 id, bit, sz;
+	int i;
+
+	if (ti_init(&res) || !ti_btf_available())
+		return -ENODATA;
+	if (ti_type_by_name(ti_base(), "task_struct", BIT(BTF_KIND_STRUCT), &id))
+		return -ENOENT;
+
+	for (i = 0; i < DLC_GHOST_F_COUNT; i++) {
+		if (ti_member_off(ti_base(), id, dlc_ghost_fields[i], &bit, &sz))
+			return -ENOENT;
+		dlc_ghost_offs[i] = bit / 8;
+	}
+
+	dlc_ghost_size = ti_type_size(ti_base(), id);
+	if (!dlc_ghost_size)
+		return -ENOENT;
+
+	return 0;
+}
+
+static void *dlc_ghost_at(unsigned int field)
+{
+	return (char *)&dlc_ghost_task + dlc_ghost_offs[field];
+}
+
+
 // ghost is a shallow copy of init_task, list heads re-init to self
 static int dlc_ghost_build(void)
 {
 	unsigned long init_task_addr = dlc_ghost_sym("init_task");
+	unsigned int copy, i;
+	int ret;
 
 	if (!init_task_addr)
 		return -ENOENT;
 
-	memcpy(&dlc_ghost_task, (void *)init_task_addr, sizeof(struct task_struct));
-	INIT_LIST_HEAD(&dlc_ghost_task.tasks);
-	INIT_LIST_HEAD(&dlc_ghost_task.children);
-	INIT_LIST_HEAD(&dlc_ghost_task.sibling);
-	INIT_LIST_HEAD(&dlc_ghost_task.thread_node);
-	INIT_LIST_HEAD(&dlc_ghost_task.ptraced);
-	INIT_LIST_HEAD(&dlc_ghost_task.ptrace_entry);
-	strscpy(dlc_ghost_task.comm, DLC_GHOST_TASK_COMM, TASK_COMM_LEN);
-	/*
-	 * vendors index PID_MAX_DEFAULT sized arrays by p->pid, so the pid has
-	 * to stay inside that range; init_task.thread_pid is init_struct_pid
-	 * (nr 0) so task_pid_vnr()/task_tgid_vnr() report the same 0 and stay
-	 * consistent with the raw fields. slot 0 belongs to swapper, no task in
-	 * the pid array is ever reached through it.
-	 */
-	dlc_ghost_task.pid = 0;
-	dlc_ghost_task.tgid = 0;
-	refcount_set(&dlc_ghost_task.usage, 1000);
+	ret = dlc_ghost_layout();
+	if (ret) {
+		pr_err("[droid_lkm_compat] ghost: no task_struct offsets for the running kernel (%d)\n",
+		       ret);
+		return ret;
+	}
+
+	// the running kernel's task_struct may be smaller than this build's
+	copy = sizeof(dlc_ghost_task);
+	if (dlc_ghost_size < copy)
+		copy = dlc_ghost_size;
+	memcpy(&dlc_ghost_task, (void *)init_task_addr, copy);
+
+	for (i = DLC_GHOST_F_TASKS; i <= DLC_GHOST_F_PTRACE_ENTRY; i++)
+		INIT_LIST_HEAD(dlc_ghost_at(i));
+
+	strscpy(dlc_ghost_at(DLC_GHOST_F_COMM), DLC_GHOST_TASK_COMM, TASK_COMM_LEN);
+	// vendors index PID_MAX_DEFAULT sized arrays by p->pid
+	// init_task.thread_pid is init_struct_pid nr 0 so the vnr helpers agree
+	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_PID) = 0;
+	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_TGID) = 0;
+	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), 1000);
 	dlc_ghost_ready = true;
 	return 0;
 }
 
-/*
- * the ghost task only covers lookups that miss; a pid_max above
- * PID_MAX_DEFAULT lets real tasks carry pids the same vendors cannot index
- */
+// vendor tables are PID_MAX_DEFAULT entries indexed by task->pid
+// 0 caps only when such a module is loaded
+// -1 never  N caps to N
+static int dlc_pid_max_cap;
+module_param_named(pid_max_cap, dlc_pid_max_cap, int, 0444);
+MODULE_PARM_DESC(pid_max_cap,
+	"0 caps pid_max only when a pid indexed vendor module is loaded, -1 never, N caps to N");
+
+static const char *const dlc_pid_indexed_modules[] = {
+	"oplus_bsp_sched_assist",
+	"oplus_bsp_task_sched",
+	"oplus_bsp_schedinfo",
+	"oplus_bsp_schedtune",
+	"oplus_bsp_sched_ext",
+	"oplus_bsp_uxmem_opt",
+};
+
+/* sysfs is the one place every branch agrees on, so ask it through kern_path */
+static bool dlc_module_loaded(const char *name)
+{
+	int (*kern_path_fn)(const char *, unsigned int, struct path *);
+	void (*path_put_fn)(const struct path *);
+	char path[64];
+	struct path p;
+
+	kern_path_fn = (void *)dlc_ghost_sym("kern_path");
+	path_put_fn = (void *)dlc_ghost_sym("path_put");
+	if (!kern_path_fn || !path_put_fn)
+		return false;
+
+	snprintf(path, sizeof(path), "/sys/module/%s", name);
+	if (kern_path_fn(path, 0, &p))
+		return false;
+	path_put_fn(&p);
+	return true;
+}
+
 static void dlc_ghost_audit_pid_max(void)
 {
-	unsigned long addr = dlc_ghost_sym("pid_max");
-	int value;
+	int *pid_max_addr = (int *)dlc_ghost_sym("pid_max");
+	int value, cap = dlc_pid_max_cap;
+	int i;
 
-	if (!addr)
+	if (!pid_max_addr || cap < 0)
 		return;
-	value = *(int *)addr;
-	if (value > PID_MAX_DEFAULT)
-		pr_warn("[droid_lkm_compat] ghost: pid_max=%d exceeds %d\n",
-			value, PID_MAX_DEFAULT);
+
+	value = READ_ONCE(*pid_max_addr);
+
+	/* an explicit cap is enforced as given, whatever the default happens to be */
+	if (cap > 0) {
+		if (value <= cap)
+			return;
+		WRITE_ONCE(*pid_max_addr, cap);
+		pr_warn("[droid_lkm_compat] pid_max %d -> %d by module parameter\n",
+			value, cap);
+		return;
+	}
+
+	if (value <= PID_MAX_DEFAULT)
+		return;
+
+	{
+		for (i = 0; i < ARRAY_SIZE(dlc_pid_indexed_modules); i++) {
+			if (dlc_module_loaded(dlc_pid_indexed_modules[i])) {
+				pr_warn("[droid_lkm_compat] pid_max=%d with %s loaded: pid indexed arrays are sized for %d\n",
+					value, dlc_pid_indexed_modules[i],
+					PID_MAX_DEFAULT);
+				break;
+			}
+		}
+		if (i == ARRAY_SIZE(dlc_pid_indexed_modules))
+			return;
+		cap = PID_MAX_DEFAULT;
+	}
+
+	if (value <= cap)
+		return;
+
+	WRITE_ONCE(*pid_max_addr, cap);
+	pr_warn("[droid_lkm_compat] pid_max %d -> %d, pids wrap inside the range vendor arrays cover\n",
+		value, cap);
 }
 
 void dlc_ghost_exit(void)
@@ -176,6 +314,7 @@ int dlc_ghost_init(void)
 		return ret;
 	}
 	dlc_ghost_audit_pid_max();
+
 
 	dlc_module_address = (typeof(dlc_module_address))dlc_ghost_sym("__module_address");
 	if (!dlc_module_address) {

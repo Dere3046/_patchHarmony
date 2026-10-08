@@ -790,8 +790,9 @@ static int droid_lkm_nsproxy_hook_install(void)
 	droid_lkm_check_unshare_flags_fn =
 		(int (*)(unsigned long))droid_lkm_sym("check_unshare_flags");
 
-	ret = droid_lkm_do_inline_hook(&droid_lkm_cnn_hook, "create_new_namespaces",
-			     "droid_lkm_cnn_wrap");
+	ret = droid_lkm_hook_install_critical(&droid_lkm_cnn_hook,
+					      "create_new_namespaces",
+					      "droid_lkm_cnn_wrap");
 	if (ret) {
 		droid_lkm_warn("nsproxy hook unavailable (%d): clone/clone3 CLONE_NEWPID|NEWIPC stay EINVAL, unshare uses the legacy path\n",
 			ret);
@@ -998,7 +999,9 @@ static int droid_lkm_clone_slot_install(void)
 
 static int droid_lkm_copy_namespaces_hook_install(void)
 {
-	int ret = droid_lkm_do_inline_hook(&droid_lkm_cn_hook, "copy_namespaces", "droid_lkm_cn_wrap");
+	int ret = droid_lkm_hook_install_critical(&droid_lkm_cn_hook,
+						  "copy_namespaces",
+						  "droid_lkm_cn_wrap");
 
 	if (ret) {
 		droid_lkm_warn("copy_namespaces hook unavailable (%d)\n", ret);

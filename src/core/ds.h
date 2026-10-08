@@ -87,5 +87,12 @@ extern bool droid_lkm_inline_hooks_on;
 
 int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
 			     const char *wrap);
+int droid_lkm_hook_install(struct hk_inline *h, const char *sym,
+			   const char *wrap);
+int droid_lkm_hook_install_critical(struct hk_inline *h, const char *sym,
+				    const char *wrap);
+bool droid_lkm_hook_critical_ok(void);
+bool droid_lkm_degrade_enabled(void);
+void droid_lkm_hook_report(void);
 void droid_lkm_hook_policy_apply(void);
 

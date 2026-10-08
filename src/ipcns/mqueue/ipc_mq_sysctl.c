@@ -27,6 +27,7 @@
 #include "ipc_util.h"
 #include "ipc_sysctl.h"
 #include "ds_ipcns.h"
+#include "ds_ti.h"
 
 #include "ipc_mqueue_compat.h"
 
@@ -93,24 +94,55 @@ static struct ctl_table mq_sysctls[] = {
 /* the sentinel is not an entry */
 #define DROID_LKM_MQ_SYSCTL_COUNT	(ARRAY_SIZE(mq_sysctls) - 1)
 
+// ipc_namespace members go through the layout table
+// a build offset is what the 6.12 device crashed on
+#define DROID_LKM_NS_MQ_SET(_ns)                                               \
+	((struct ctl_table_set *)droid_lkm_layout_ptr((_ns),                   \
+			DROID_LKM_F_IPC_NS_MQ_SET))
+#define DROID_LKM_NS_MQ_SYSCTLS(_ns)                                           \
+	((struct ctl_table_header **)droid_lkm_layout_ptr((_ns),               \
+			DROID_LKM_F_IPC_NS_MQ_SYSCTLS))
+#define DROID_LKM_NS_FIELD(_ns, _id)                                           \
+	((void *)droid_lkm_layout_ptr((_ns), (_id)))
+#define DROID_LKM_INIT_NS_FIELD(_id)                                           \
+	((void *)((char *)&init_ipc_ns + droid_lkm_layout_off(_id)))
+
+static bool droid_lkm_mq_sysctl_fields_ok(void)
+{
+	if (!droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_SET) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_SYSCTLS) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_USER_NS) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_MSG_MAX) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT) ||
+	    !droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT))
+		return false;
+
+	return true;
+}
+
 static struct ctl_table_set *set_lookup(struct ctl_table_root *root)
 {
-	return &droid_lkm_ipcns_current()->mq_set;
+	return DROID_LKM_NS_MQ_SET(droid_lkm_ipcns_current());
 }
 
 static int set_is_seen(struct ctl_table_set *set)
 {
-	return &droid_lkm_ipcns_current()->mq_set == set;
+	return DROID_LKM_NS_MQ_SET(droid_lkm_ipcns_current()) == set;
 }
 
 static void mq_set_ownership(struct ctl_table_header *head,
 			     kuid_t *uid, kgid_t *gid)
 {
 	struct ipc_namespace *ns =
-		container_of(head->set, struct ipc_namespace, mq_set);
+		(struct ipc_namespace *)((char *)head->set -
+			droid_lkm_layout_off(DROID_LKM_F_IPC_NS_MQ_SET));
 
-	kuid_t ns_root_uid = make_kuid(ns->user_ns, 0);
-	kgid_t ns_root_gid = make_kgid(ns->user_ns, 0);
+	struct user_namespace *user_ns = *(struct user_namespace **)
+		DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_USER_NS);
+	kuid_t ns_root_uid = make_kuid(user_ns, 0);
+	kgid_t ns_root_gid = make_kgid(user_ns, 0);
 
 	*uid = uid_valid(ns_root_uid) ? ns_root_uid : GLOBAL_ROOT_UID;
 	*gid = gid_valid(ns_root_gid) ? ns_root_gid : GLOBAL_ROOT_GID;
@@ -166,7 +198,12 @@ bool droid_lkm_setup_mq_sysctls(struct ipc_namespace *ns)
 	if (!droid_lkm_sysctl_ready())
 		return true;
 
-	droid_lkm_sysctl_setup_set(&ns->mq_set, &set_root, set_is_seen);
+	if (!droid_lkm_mq_sysctl_fields_ok()) {
+		droid_lkm_warn("mqueue sysctls refused: the running kernel's layout does not place ipc_namespace.mq_set\n");
+		return false;
+	}
+
+	droid_lkm_sysctl_setup_set(DROID_LKM_NS_MQ_SET(ns), &set_root, set_is_seen);
 
 	tbl = kmemdup(mq_sysctls,
 		      DROID_LKM_MQ_SYSCTL_COUNT * sizeof(mq_sysctls[0]),
@@ -175,31 +212,41 @@ bool droid_lkm_setup_mq_sysctls(struct ipc_namespace *ns)
 		int i;
 
 		for (i = 0; i < DROID_LKM_MQ_SYSCTL_COUNT; i++) {
-			if (tbl[i].data == &init_ipc_ns.mq_queues_max)
-				tbl[i].data = &ns->mq_queues_max;
+			if (tbl[i].data ==
+			    DROID_LKM_INIT_NS_FIELD(DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX))
+				tbl[i].data = DROID_LKM_NS_FIELD(ns,
+					DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX);
 
-			else if (tbl[i].data == &init_ipc_ns.mq_msg_max)
-				tbl[i].data = &ns->mq_msg_max;
+			else if (tbl[i].data ==
+				 DROID_LKM_INIT_NS_FIELD(DROID_LKM_F_IPC_NS_MQ_MSG_MAX))
+				tbl[i].data = DROID_LKM_NS_FIELD(ns,
+					DROID_LKM_F_IPC_NS_MQ_MSG_MAX);
 
-			else if (tbl[i].data == &init_ipc_ns.mq_msgsize_max)
-				tbl[i].data = &ns->mq_msgsize_max;
+			else if (tbl[i].data ==
+				 DROID_LKM_INIT_NS_FIELD(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX))
+				tbl[i].data = DROID_LKM_NS_FIELD(ns,
+					DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX);
 
-			else if (tbl[i].data == &init_ipc_ns.mq_msg_default)
-				tbl[i].data = &ns->mq_msg_default;
+			else if (tbl[i].data ==
+				 DROID_LKM_INIT_NS_FIELD(DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT))
+				tbl[i].data = DROID_LKM_NS_FIELD(ns,
+					DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT);
 
-			else if (tbl[i].data == &init_ipc_ns.mq_msgsize_default)
-				tbl[i].data = &ns->mq_msgsize_default;
+			else if (tbl[i].data ==
+				 DROID_LKM_INIT_NS_FIELD(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT))
+				tbl[i].data = DROID_LKM_NS_FIELD(ns,
+					DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT);
 			else
 				tbl[i].data = NULL;
 		}
 
-		ns->mq_sysctls = droid_lkm_sysctl_register_table(
-			&ns->mq_set, "fs/mqueue", tbl,
+		*DROID_LKM_NS_MQ_SYSCTLS(ns) = droid_lkm_sysctl_register_table(
+			DROID_LKM_NS_MQ_SET(ns), "fs/mqueue", tbl,
 			DROID_LKM_MQ_SYSCTL_COUNT);
 	}
-	if (!ns->mq_sysctls) {
+	if (!*DROID_LKM_NS_MQ_SYSCTLS(ns)) {
 		kfree(tbl);
-		droid_lkm_sysctl_retire_set(&ns->mq_set);
+		droid_lkm_sysctl_retire_set(DROID_LKM_NS_MQ_SET(ns));
 		return false;
 	}
 
@@ -210,13 +257,13 @@ void droid_lkm_retire_mq_sysctls(struct ipc_namespace *ns)
 {
 	const struct ctl_table *tbl;
 
-	if (!ns->mq_sysctls)
+	if (!*DROID_LKM_NS_MQ_SYSCTLS(ns))
 		return;
 
-	tbl = ns->mq_sysctls->ctl_table_arg;
-	unregister_sysctl_table(ns->mq_sysctls);
-	ns->mq_sysctls = NULL;
-	droid_lkm_sysctl_retire_set(&ns->mq_set);
+	tbl = (*DROID_LKM_NS_MQ_SYSCTLS(ns))->ctl_table_arg;
+	unregister_sysctl_table(*DROID_LKM_NS_MQ_SYSCTLS(ns));
+	*DROID_LKM_NS_MQ_SYSCTLS(ns) = NULL;
+	droid_lkm_sysctl_retire_set(DROID_LKM_NS_MQ_SET(ns));
 	kfree(tbl);
 }
 
