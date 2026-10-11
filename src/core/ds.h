@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
+
+#include <linux/version.h>
 /*
  * Copyright (C) 2026 dere3046
  */
-
 
 #ifndef DROID_LKM_H
 #define DROID_LKM_H
@@ -96,3 +97,44 @@ bool droid_lkm_degrade_enabled(void);
 void droid_lkm_hook_report(void);
 void droid_lkm_hook_policy_apply(void);
 
+/*
+ * 6.18 moved the namespace type out of proc_ns_operations and into
+ * ns_common::ns_type. every place that hands a namespace its operations goes
+ * through this, so no call site carries the difference
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+#define droid_lkm_ns_set_ops(_ns, _ops, _type)                                 \
+	do {                                                                   \
+		(_ns)->ops = (_ops);                                           \
+		(_ns)->ns_type = (_type);                                      \
+	} while (0)
+#else
+#define droid_lkm_ns_set_ops(_ns, _ops, _type)                                 \
+	do {                                                                   \
+		(_ns)->ops = (_ops);                                           \
+	} while (0)
+#endif
+
+/*
+ * 6.18 hands MODULE_INFO the namespace as a string, before it stringified the
+ * token itself, so the call sites name the namespace once and this picks the
+ * form the kernel takes
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+#define DROID_LKM_STR(_x)	#_x
+#define DROID_LKM_GKI_NS(_ns)	ANDROID_GKI_##_ns
+#define DROID_LKM_IMPORT_NS(_ns)                                               \
+	MODULE_IMPORT_NS(#_ns);                                                \
+	MODULE_IMPORT_NS(DROID_LKM_STR(DROID_LKM_GKI_NS(_ns)))
+#else
+#define DROID_LKM_IMPORT_NS(_ns)	MODULE_IMPORT_NS(_ns)
+#endif
+
+/*
+ * the kernel declares these itself before 6.18 while the shims here define
+ * them on every version, so the prototypes live where both can see them
+ */
+struct dentry;
+struct dentry_operations;
+struct dentry *lookup_one_len(const char *name, struct dentry *base, int len);
+void d_set_d_op(struct dentry *dentry, const struct dentry_operations *op);

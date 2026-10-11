@@ -3,7 +3,6 @@
  * Copyright (C) 2006 Pavel Emelyanov <xemul@openvz.org> OpenVZ, SWsoft Inc.
  */
 
-
 #include <linux/module.h>
 #include <linux/ipc.h>
 #include <linux/msg.h>
@@ -32,7 +31,6 @@
 #include "ds_nsops.h"
 #include "ipc_util.h"
 
-
 /*
  * ns_common carries its own refcount from 5.15 on; 5.10 keeps the count of an
  * ipc namespace in the refcount_t at the top of the struct. one accessor keeps
@@ -40,7 +38,9 @@
  */
 static inline refcount_t *droid_lkm_ipcns_refcount(struct ipc_namespace *ns)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	return &ns->ns.__ns_ref;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	return &ns->ns.count;
 #else
 	return &ns->count;
@@ -57,15 +57,12 @@ struct droid_lkm_ipcns_entry {
 static LIST_HEAD(droid_lkm_ipcns_list);
 static DEFINE_SPINLOCK(droid_lkm_ipcns_lock);
 
-
 static struct ipc_namespace *droid_lkm_ipcns_host;
 static struct ipc_namespace *droid_lkm_ipcns_orig;
 /* set when the running kernel owns ipc namespaces, see the classification in ds_caps.c */
 static bool droid_lkm_ipcns_kernel_owned;
 
-
 static const struct proc_ns_operations *droid_lkm_ipcns_neutral_ops;
-
 
 static struct nsproxy *droid_lkm_init_nsproxy;
 
@@ -169,7 +166,7 @@ out_kernel_ns:
 	if (err)
 		goto out_free;
 
-	ns->ns.ops = &droid_lkm_ipcns_ops;
+	droid_lkm_ns_set_ops(&ns->ns, &droid_lkm_ipcns_ops, CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(ns), 1);
 	/* same ownership rule as the fake pid namespace, see droid_lkm_pidns_create */
 	ns->user_ns = current_cred()->user_ns;
@@ -245,7 +242,6 @@ bool droid_lkm_ipcns_is_ours(struct ipc_namespace *ns)
 	spin_unlock_irqrestore(&droid_lkm_ipcns_lock, flags);
 	return found;
 }
-
 
 bool droid_lkm_ipcns_is_host(struct ipc_namespace *ns)
 {
@@ -330,7 +326,9 @@ static struct user_namespace *droid_lkm_ipcns_owner(struct ns_common *ns)
 
 const struct proc_ns_operations droid_lkm_ipcns_ops = {
 	.name = "ipc",
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	.type = CLONE_NEWIPC,
+#endif
 	.get = droid_lkm_ipcns_get_task,
 	.put = droid_lkm_ipcns_put_common,
 	.install = droid_lkm_ipcns_install,
@@ -362,7 +360,6 @@ struct ipc_namespace *droid_lkm_ipcns_current(void)
 	return droid_lkm_ipcns_task_ns(current);
 }
 
-
 static bool droid_lkm_ipcns_ids_used(struct ipc_namespace *ns)
 {
 	int i;
@@ -373,7 +370,6 @@ static bool droid_lkm_ipcns_ids_used(struct ipc_namespace *ns)
 	}
 	return false;
 }
-
 
 bool droid_lkm_ipcns_busy(void)
 {
@@ -433,7 +429,8 @@ int droid_lkm_ipcns_init(void)
 	
 	droid_lkm_ipcns_host->ns.inum = PROC_IPC_INIT_INO;
 	
-	droid_lkm_ipcns_host->ns.ops = &droid_lkm_ipcns_ops;
+	droid_lkm_ns_set_ops(&droid_lkm_ipcns_host->ns, &droid_lkm_ipcns_ops,
+			     CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(droid_lkm_ipcns_host), 1);
 	droid_lkm_ipcns_host->user_ns = &init_user_ns;
 
@@ -506,7 +503,6 @@ int droid_lkm_ipcns_init(void)
 	droid_lkm_ipc_sysctls_init();
 	return 0;
 }
-
 
 __nocfi noinline void droid_lkm_ipcns_exit(void)
 {

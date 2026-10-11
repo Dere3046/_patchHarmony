@@ -30,7 +30,9 @@ DEFINE_SPINLOCK(mq_lock);
  */
 struct ipc_namespace init_ipc_ns = {
 	/* ns_common::count arrived in 5.15, before that the count is its own field */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	.ns.__ns_ref = REFCOUNT_INIT(1),
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	.ns.count = REFCOUNT_INIT(1),
 #else
 	.count = REFCOUNT_INIT(1),
@@ -45,6 +47,9 @@ struct ipc_namespace init_ipc_ns = {
 	 * depend on the running kernel having ipc namespaces
 	 */
 	.ns.ops = &droid_lkm_ipcns_ops,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	.ns.ns_type = CLONE_NEWIPC,
+#endif
 };
 
 struct msg_msgseg {

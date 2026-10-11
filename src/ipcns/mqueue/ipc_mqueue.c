@@ -13,9 +13,8 @@
  * This file is released under the GPL.
  */
 
-
-
 #include <linux/capability.h>
+#include <linux/moduleparam.h>
 #include <linux/init.h>
 #include <linux/pagemap.h>
 #include <linux/file.h>
@@ -51,7 +50,7 @@
 #include "ipc_util.h"
 #include "ipc_mqueue_compat.h"
 
-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
+DROID_LKM_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 
 struct mqueue_fs_context {
 	struct ipc_namespace	*ipc_ns;
@@ -415,7 +414,6 @@ static int mqueue_fill_super(struct super_block *sb, struct fs_context *fc)
 {
 	struct inode *inode;
 	struct ipc_namespace *ns = sb->s_fs_info;
-
 
 	sb->s_iflags |= SB_I_NOEXEC | SB_I_NODEV;
 	sb->s_blocksize = PAGE_SIZE;
@@ -785,7 +783,6 @@ static struct ext_wait_queue *wq_get_first_waiter(
 	return list_entry(ptr, struct ext_wait_queue, list);
 }
 
-
 static inline void set_cookie(struct sk_buff *skb, char code)
 {
 	((char *)skb->data)[NOTIFY_COOKIE_LEN-1] = code;
@@ -905,6 +902,49 @@ static __nocfi noinline int prepare_open(struct dentry *dentry, int oflag, int r
 	return droid_lkm_mq_inode_permission(dentry, acc);
 }
 
+static __nocfi noinline struct dentry *droid_lkm_mq_lookup(struct dentry *base,
+							   const char *name)
+{
+	size_t len = strlen(name);
+	struct dentry *alias;
+
+	/* the kernel refuses a name carrying a slash */
+	if (memchr(name, '/', len))
+		return ERR_PTR(-EACCES);
+	struct qstr q = {
+		.name = name,
+		.hash_len = hashlen_create(full_name_hash(NULL, name, len), len),
+	};
+	struct dentry *d;
+
+	static struct dentry *(*alloc)(struct dentry *, const struct qstr *);
+	static struct dentry *(*lookup)(const struct dentry *,
+					const struct qstr *);
+
+	if (!alloc)
+		alloc = (void *)droid_lkm_sym("d_alloc");
+	if (!alloc)
+		return ERR_PTR(-ENOSYS);
+
+	if (!lookup)
+		lookup = (void *)droid_lkm_sym("d_lookup");
+	/* an existing queue already has a positive dentry */
+	if (lookup) {
+		d = lookup(base, &q);
+		if (d)
+			return d;
+	}
+
+	/* d_alloc is not exported on 6.18 */
+	d = alloc(base, &q);
+	if (!d)
+		return ERR_PTR(-ENOMEM);
+
+	/* d_splice_alias answers NULL when there is no alias */
+	alias = d_splice_alias(NULL, d);
+	return alias ? alias : d;
+}
+
 static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umode_t mode,
 		      struct mq_attr *attr)
 {
@@ -929,7 +969,7 @@ static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umo
 
 	audit_mq_open(oflag, mode, attr);
 
-	name = getname(u_name);
+	name = droid_lkm_getname(u_name);
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
@@ -939,7 +979,7 @@ static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umo
 
 	ro = mnt_want_write(mnt);	/* we'll drop it in any case */
 	inode_lock(d_inode(root));
-	path.dentry = lookup_one_len(name->name, root, strlen(name->name));
+	path.dentry = droid_lkm_mq_lookup(root, name->name);
 	if (IS_ERR(path.dentry)) {
 		error = PTR_ERR(path.dentry);
 		droid_lkm_dbg("mq open: lookup name=%s len=%zu -> %d\n",
@@ -1007,7 +1047,7 @@ __nocfi noinline SYSCALL_DEFINE1(mq_unlink, const char __user *, u_name)
 		return -ENODEV;
 	mnt = ipc_ns->mq_mnt;
 
-	name = getname(u_name);
+	name = droid_lkm_getname(u_name);
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
@@ -1016,8 +1056,7 @@ __nocfi noinline SYSCALL_DEFINE1(mq_unlink, const char __user *, u_name)
 	if (err)
 		goto out_name;
 	inode_lock_nested(d_inode(mnt->mnt_root), I_MUTEX_PARENT);
-	dentry = lookup_one_len(name->name, mnt->mnt_root,
-				strlen(name->name));
+	dentry = droid_lkm_mq_lookup(mnt->mnt_root, name->name);
 	if (IS_ERR(dentry)) {
 		err = PTR_ERR(dentry);
 		goto out_unlock;
@@ -1405,7 +1444,13 @@ retry:
 				ret = -EBADF;
 				goto out;
 			}
-			sock = netlink_getsockbyfilp(droid_lkm_fd_file(f));
+			/* 6.18 carries the fd form only */
+			if (droid_lkm_p_netlink_getsockbyfd)
+				sock = droid_lkm_p_netlink_getsockbyfd(
+					notification->sigev_signo);
+			else
+				sock = droid_lkm_p_netlink_getsockbyfilp(
+					droid_lkm_fd_file(f));
 			fdput(f);
 			if (IS_ERR(sock)) {
 				ret = PTR_ERR(sock);
@@ -1817,8 +1862,6 @@ out_kmem:
 	kmem_cache_destroy(mqueue_inode_cachep);
 	return error;
 }
-
-
 
 void droid_lkm_mqueue_fs_exit(void)
 {

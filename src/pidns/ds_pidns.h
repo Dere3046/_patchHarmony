@@ -3,7 +3,6 @@
  * Copyright (C) 2026 dere3046
  */
 
-
 #ifndef DROID_LKM_PIDNS_H
 #define DROID_LKM_PIDNS_H
 
@@ -22,7 +21,9 @@
  */
 static inline refcount_t *droid_lkm_pidns_refcount(struct pid_namespace *ns)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	return &ns->ns.__ns_ref;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	return &ns->ns.count;
 #else
 	return &ns->kref.refcount;

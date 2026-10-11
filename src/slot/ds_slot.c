@@ -31,6 +31,13 @@
 #include "hk_patch.h"
 #include "hk_inline.h"
 
+/* 6.18 builds with -Wmissing-prototypes */
+struct droid_lkm_clone_ctx;
+__nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags, struct droid_lkm_clone_ctx *ctx);
+__nocfi noinline void droid_lkm_clone_ctx_leave(struct droid_lkm_clone_ctx *ctx);
+__nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags, struct task_struct *tsk, struct user_namespace *user_ns, struct fs_struct *fs);
+__nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *tsk);
+
 typedef long (*droid_lkm_syscall_fn)(const struct pt_regs *regs);
 
 asmlinkage long __arm64_sys_mq_open(const struct pt_regs *regs);
@@ -86,7 +93,6 @@ static bool droid_lkm_world_task(struct task_struct *t)
 		return false;
 	if (droid_lkm_pidns_is_ours(nsp->pid_ns_for_children))
 		return true;
-
 
 	if (droid_lkm_ipcns_is_ours(nsp->ipc_ns) && !droid_lkm_ipcns_is_host(nsp->ipc_ns))
 		return true;
@@ -325,6 +331,7 @@ static int droid_lkm_ipc_attach(unsigned long *tab, int nr, unsigned long fn,
 		return -EIO;
 	}
 	*orig = (droid_lkm_syscall_fn)was;
+
 	droid_lkm_dbg("ipc slot %d (%s) 0x%lx[%s] -> ours\n", nr, name, cur,
 		      sym);
 	return 0;
@@ -513,7 +520,6 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 	if (!want_pid && !want_ipc)
 		return droid_lkm_cnn_orig(flags, tsk, user_ns, fs);
 
-
 	if (!droid_lkm_gate_allow())
 		return droid_lkm_cnn_orig(flags, tsk, user_ns, fs);
 
@@ -580,13 +586,11 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	if (!want_pid && !want_ipc)
 		return droid_lkm_cn_orig(flags, tsk);
 
-
 	if (!droid_lkm_ks.switch_task_namespaces)
 		return droid_lkm_cn_orig(flags, tsk);
 
 	if (!droid_lkm_gate_allow())
 		return droid_lkm_cn_orig(flags, tsk);
-
 
 	if ((flags & (CLONE_NEWIPC | CLONE_SYSVSEM)) ==
 	    (CLONE_NEWIPC | CLONE_SYSVSEM))
@@ -620,7 +624,6 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 		droid_lkm_ipcns_put(new_ipc);
 		return ret;
 	}
-
 
 	if (!(inner & DROID_LKM_NS_FLAGS)) {
 		priv = droid_lkm_cnn_orig(0, tsk, current_user_ns(), tsk->fs);
@@ -657,7 +660,6 @@ static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 
 	if (droid_lkm_check_unshare_flags_fn && droid_lkm_check_unshare_flags_fn(f))
 		return false;
-
 
 	if ((flags & DROID_LKM_NS_ALL) &&
 	    !ns_capable(current_user_ns(), CAP_SYS_ADMIN))
@@ -709,10 +711,8 @@ static long droid_lkm_sys_unshare(const struct pt_regs *regs)
 	unsigned long flags = regs->regs[0];
 	long ret;
 
-
 	if (!(flags & (CLONE_NEWPID | CLONE_NEWIPC | CLONE_SYSVSEM)))
 		return droid_lkm_orig_unshare(regs);
-
 
 	if (!droid_lkm_gate_allow()) {
 		droid_lkm_dbg("unshare: %s[%d] flags=0x%lx NOT ours -> kernel\n",
@@ -734,8 +734,6 @@ static long droid_lkm_sys_unshare(const struct pt_regs *regs)
 	if (!droid_lkm_cnn_hooked)
 		return droid_lkm_unshare_legacy(regs);
 
-
-
 	if (!droid_lkm_unshare_precheck(flags))
 		return droid_lkm_orig_unshare(regs);
 
@@ -744,9 +742,7 @@ static long droid_lkm_sys_unshare(const struct pt_regs *regs)
 	if (flags & CLONE_NEWIPC)
 		droid_lkm_exit_shm(current);
 
-
 	ret = droid_lkm_orig_unshare(regs);
-
 
 	if (!ret)
 		droid_lkm_keepalive_pin();
@@ -767,8 +763,6 @@ static long droid_lkm_sys_reboot(const struct pt_regs *regs)
 	if (!droid_lkm_pidns_is_ours(ns))
 		return droid_lkm_orig_reboot(regs);
 
-
-
 	if (magic1 != LINUX_REBOOT_MAGIC1 ||
 	    (magic2 != LINUX_REBOOT_MAGIC2 && magic2 != LINUX_REBOOT_MAGIC2A &&
 	     magic2 != LINUX_REBOOT_MAGIC2B && magic2 != LINUX_REBOOT_MAGIC2C))
@@ -777,7 +771,6 @@ static long droid_lkm_sys_reboot(const struct pt_regs *regs)
 	ret = droid_lkm_pidns_reboot(ns, cmd);
 	if (ret)
 		return ret;
-
 
 	send_sig(SIGKILL, current, 1);
 	return 0;

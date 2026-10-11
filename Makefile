@@ -12,7 +12,6 @@ include $(MDIR)/mk/deps.mk
 # both ko's link the whole type info reader now
 # the exports that used to collide are gated upstream (CONFIG_TI_MODNAME)
 
-
 # optional HooKern features we do not use
 DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_lsm.o,$(DEPS_OBJS_ALL))
 
@@ -34,6 +33,9 @@ droid_lkm_compat-y := $(DLC_COMPAT_OBJS) $(DEPS_OBJS_ALL)
 # third ko in the same Kbuild: kernel features the device lacks, container scoped
 #   xt matches and targets through the exported registration API
 #   cgroup pids and device effect, devtmpfs, optional link types
+obj-m += droid_lkm_toy.o
+droid_lkm_toy-y := toy/toy_main.o $(DEPS_OBJS_ALL)
+
 # droid_lkm_misc.o is not built yet, it is unfinished; re-enable it with the
 # line below once its sources are ready
 # obj-$(DLKM_OPT) += droid_lkm_misc.o
@@ -158,14 +160,20 @@ ccflags-y += -I$(src)/src/misc -I$(src)/src/misc/xt -I$(src)/src/misc/userns
 ccflags-y += -I$(src)/src/misc/devtmpfs
 ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 
+# 6.18 turns on -Wmissing-prototypes, and this module both defines kernel
+# names the newer kernel stops declaring and exposes entry points through
+# headers the shim files do not include; older compilers ignore the flag
+ccflags-y += -Wno-missing-prototypes
+
 # KernCall: enable sys_call_table slot patching
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
 
 all:
-	@mkdir -p $(sort $(dir $(addprefix $(ODIR)/,$(droid_lkm-y) $(droid_lkm_compat-y) $(droid_lkm_misc-y))))
-	make -C $(KDIR) M=$(ODIR) src=$(MDIR) modules
+	@mkdir -p $(sort $(dir $(addprefix $(ODIR)/,$(droid_lkm-y) $(droid_lkm_compat-y) $(droid_lkm_misc-y) $(droid_lkm_toy-y))))
+	# 6.18 kbuild derives src from srcroot, older kernels ignore it
+	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) modules
 clean:
-	make -C $(KDIR) M=$(ODIR) src=$(MDIR) clean
+	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) clean
 
 $(obj)/%.o: $(src)/%.c $(recordmcount_source) FORCE
 	$(call if_changed_rule,cc_o_c)

@@ -4,6 +4,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/namei.h>
@@ -16,10 +17,10 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 
-MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
-
 #include "hk_patch.h"
 #include "ds.h"
+
+DROID_LKM_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 #include "ds_ipcns.h"
 #include "ds_pidns.h"
 #include "ds_proc.h"
@@ -164,7 +165,6 @@ static __nocfi noinline struct dentry *droid_lkm_ns_lookup(struct inode *dir, st
 	struct task_struct *task;
 	struct dentry *res;
 
-
 	res = droid_lkm_orig_ns_lookup(dir, dentry, flags);
 	if (!IS_ERR(res) || PTR_ERR(res) != -ENOENT)
 		return res;
@@ -224,7 +224,6 @@ static int droid_lkm_proc_steal_ns_link_iops(void)
 	struct path path;
 	int ret;
 
-
 	ret = kern_path("/proc/self/ns/mnt", 0, &path);
 	if (ret) {
 		droid_lkm_err("cannot open /proc/self/ns/mnt: %d\n", ret);
@@ -259,8 +258,6 @@ int droid_lkm_proc_init(void)
 		return -ENODATA;
 	}
 
-
-
 	ret = droid_lkm_ns_ops_host_init();
 	if (ret) {
 		droid_lkm_err("cannot build host pid ns placeholder: %d\n", ret);
@@ -292,8 +289,6 @@ int droid_lkm_proc_init(void)
 
 	droid_lkm_info("proc ns lookup hooked (orig=0x%lx)\n",
 		(unsigned long)droid_lkm_orig_ns_lookup);
-
-
 
 	if (!try_module_get(THIS_MODULE)) {
 		droid_lkm_err("cannot pin module for the ns hook\n");

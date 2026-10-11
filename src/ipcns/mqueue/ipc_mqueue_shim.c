@@ -3,7 +3,6 @@
  * Copyright (C) 2026 dere3046
  */
 
-
 #include <linux/module.h>
 #include <linux/statfs.h>
 #include <linux/kernel.h>
@@ -139,14 +138,40 @@ __nocfi noinline void path_put(const struct path *path)
 		droid_lkm_ks.path_put(path);
 }
 
+/*
+ * 6.18 made this helper static, and the address kallsyms answers for a static
+ * is not an API to call: it crashed the namespace instantiate path. the field
+ * and the flag bits it sets are the whole of it, so the module writes them
+ * itself on every version
+ */
+static unsigned int droid_lkm_d_op_flags(const struct dentry_operations *op)
+{
+	unsigned int flags = 0;
+
+	if (!op)
+		return 0;
+	if (op->d_revalidate)
+		flags |= DCACHE_OP_REVALIDATE;
+	if (op->d_weak_revalidate)
+		flags |= DCACHE_OP_WEAK_REVALIDATE;
+	if (op->d_delete)
+		flags |= DCACHE_OP_DELETE;
+	if (op->d_prune)
+		flags |= DCACHE_OP_PRUNE;
+#ifdef DCACHE_OP_REAL
+	if (op->d_real)
+		flags |= DCACHE_OP_REAL;
+#endif
+	return flags;
+}
+
 __nocfi noinline void d_set_d_op(struct dentry *dentry, const struct dentry_operations *op)
 {
-	/*
-	 * a kernel without the helper keeps the default dentry operations: the
-	 * lookups still work, the dentry only stays cached longer
-	 */
-	if (droid_lkm_ks.d_set_d_op)
-		droid_lkm_ks.d_set_d_op(dentry, op);
+	unsigned int flags = droid_lkm_d_op_flags(op);
+
+	dentry->d_op = op;
+	if (flags)
+		dentry->d_flags |= flags;
 }
 
 __nocfi noinline int down_write_killable(struct rw_semaphore *sem)
@@ -181,12 +206,16 @@ __nocfi noinline int vfs_unlink(DROID_LKM_IDMAP_PARAM struct inode *dir, struct 
 }
 
 typeof(&getname) droid_lkm_p_getname;
+/* 6.18 replaced getname(name) with getname_uflags(name, uflags) */
+struct filename *(*droid_lkm_p_getname_uflags)(const char __user *filename,
+					       int uflags);
 typeof(&putname) droid_lkm_p_putname;
 typeof(&get_next_ino) droid_lkm_p_get_next_ino;
 typeof(&vfs_mkobj) droid_lkm_p_vfs_mkobj;
 typeof(&fs_context_for_mount) droid_lkm_p_fs_context_for_mount;
 typeof(&get_tree_keyed) droid_lkm_p_get_tree_keyed;
-typeof(&netlink_getsockbyfilp) droid_lkm_p_netlink_getsockbyfilp;
+struct sock *(*droid_lkm_p_netlink_getsockbyfilp)(struct file *filp);
+struct sock *(*droid_lkm_p_netlink_getsockbyfd)(int fd);
 typeof(&netlink_attachskb) droid_lkm_p_netlink_attachskb;
 typeof(&netlink_sendskb) droid_lkm_p_netlink_sendskb;
 typeof(&netlink_detachskb) droid_lkm_p_netlink_detachskb;
@@ -245,7 +274,6 @@ __nocfi noinline void droid_lkm_mq_ucounts_put(struct ucounts *ucounts)
 
 static bool droid_lkm_mqueue_shim_ok;
 
-
 static bool droid_lkm_mqueue_enabled = true;
 module_param_named(mqueue, droid_lkm_mqueue_enabled, bool, 0444);
 MODULE_PARM_DESC(mqueue,
@@ -291,15 +319,41 @@ __nocfi noinline int droid_lkm_mqueue_shim_init(void)
 	droid_lkm_info("POSIX mqueue: %s, installing the module port\n",
 		       droid_lkm_caps.posix_mqueue.reason);
 
-	DROID_LKM_MQ_RESOLVE(droid_lkm_p_getname, "getname");
+	droid_lkm_p_getname_uflags =
+		(typeof(droid_lkm_p_getname_uflags))
+		droid_lkm_sym("getname_uflags");
+	if (!droid_lkm_p_getname_uflags)
+		droid_lkm_p_getname =
+			(typeof(droid_lkm_p_getname))droid_lkm_sym("getname");
+	droid_lkm_info("mqueue shim: getname_uflags=%px getname=%px\n",
+		       (void *)droid_lkm_p_getname_uflags,
+		       (void *)droid_lkm_p_getname);
+	if (!droid_lkm_p_getname_uflags && !droid_lkm_p_getname) {
+		droid_lkm_warn("mqueue shim: %s not found\n", "getname");
+		missing++;
+	}
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_putname, "putname");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_get_next_ino, "get_next_ino");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_vfs_mkobj, "vfs_mkobj");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_fs_context_for_mount,
 			     "fs_context_for_mount");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_get_tree_keyed, "get_tree_keyed");
-	DROID_LKM_MQ_RESOLVE(droid_lkm_p_netlink_getsockbyfilp,
-			     "netlink_getsockbyfilp");
+	/*
+	 * 6.18 renamed netlink_getsockbyfilp to netlink_getsockbyfd with the
+	 * same signature, so the newer name is asked first and the old one
+	 * keeps every kernel before it working
+	 */
+	droid_lkm_p_netlink_getsockbyfd =
+		(typeof(droid_lkm_p_netlink_getsockbyfd))
+		droid_lkm_sym("netlink_getsockbyfd");
+	droid_lkm_p_netlink_getsockbyfilp =
+		(typeof(droid_lkm_p_netlink_getsockbyfilp))
+		droid_lkm_sym("netlink_getsockbyfilp");
+	if (!droid_lkm_p_netlink_getsockbyfd && !droid_lkm_p_netlink_getsockbyfilp) {
+		droid_lkm_warn("mqueue shim: %s not found\n",
+			      "netlink_getsockbyfd/filp");
+		missing++;
+	}
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_netlink_attachskb,
 			     "netlink_attachskb");
 	DROID_LKM_MQ_RESOLVE(droid_lkm_p_netlink_sendskb, "netlink_sendskb");
@@ -387,7 +441,11 @@ struct dentry *droid_lkm_mq_simple_lookup(struct inode *dir,
 {
 	if (dentry->d_name.len > NAME_MAX)
 		return ERR_PTR(-ENAMETOOLONG);
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	if (!dentry->d_sb->__s_d_op)
+#else
 	if (!dentry->d_sb->s_d_op)
+#endif
 		d_set_d_op(dentry, &droid_lkm_mq_dops);
 	d_add(dentry, NULL);
 	return NULL;

@@ -26,6 +26,16 @@
 #include "ds_compat.h"
 #include "ds_ksym.h"
 
+/* 6.18 builds with -Wmissing-prototypes */
+__nocfi noinline void __audit_file(const struct file *file);
+__nocfi noinline void __audit_inode(struct filename *name, const struct dentry *dentry, unsigned int aflags);
+__nocfi noinline void __audit_ipc_obj(struct kern_ipc_perm *ipcp);
+__nocfi noinline void __audit_ipc_set_perm(unsigned long qbytes, uid_t uid, gid_t gid, umode_t mode);
+__nocfi noinline void __audit_mq_getsetattr(mqd_t mqdes, struct mq_attr *mqstat);
+__nocfi noinline void __audit_mq_notify(mqd_t mqdes, const struct sigevent *notification);
+__nocfi noinline void __audit_mq_open(int oflag, umode_t mode, struct mq_attr *attr);
+__nocfi noinline void __audit_mq_sendrecv(mqd_t mqdes, size_t msg_len, unsigned int msg_prio, const struct timespec64 *abs_timeout);
+
 __nocfi noinline void wake_q_add(struct wake_q_head *head, struct task_struct *task)
 {
 	if (droid_lkm_ks.wake_q_add)
@@ -131,9 +141,28 @@ __nocfi noinline void mnt_drop_write(struct vfsmount *mnt)
 
 __nocfi noinline struct dentry *lookup_one_len(const char *name, struct dentry *base, int len)
 {
-	if (!droid_lkm_ks.lookup_one_len)
-		return ERR_PTR(-ENOSYS);
-	return droid_lkm_ks.lookup_one_len(name, base, len);
+	if (droid_lkm_ks.lookup_one_len)
+		return droid_lkm_ks.lookup_one_len(name, base, len);
+	if (droid_lkm_ks.lookup_one_len)
+		return droid_lkm_ks.lookup_one_len(name, base, len);
+
+	{
+		static struct dentry *(*fn)(const struct qstr *, struct dentry *,
+					     unsigned int);
+
+		if (!fn)
+			fn = (void *)droid_lkm_sym("lookup_one_qstr_excl");
+		if (fn && base && base->d_inode) {
+			struct qstr q = {
+				.name = name,
+				.hash_len = hashlen_create(
+					full_name_hash(NULL, name, len), len),
+			};
+
+			return fn(&q, base, 0);
+		}
+	}
+	return ERR_PTR(-ENOSYS);
 }
 
 __nocfi noinline int get_tree_nodev(struct fs_context *fc,
@@ -145,7 +174,6 @@ __nocfi noinline int get_tree_nodev(struct fs_context *fc,
 	return droid_lkm_ks.get_tree_nodev(fc, fill_super);
 }
 
-
 #ifdef CONFIG_SLAB_BUCKETS
 kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
 				  unsigned int useroffset,
@@ -155,7 +183,6 @@ kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
 	return NULL;
 }
 #endif
-
 
 // missing int hooks fall back to 0 as the kernel does without CONFIG_SECURITY
 __nocfi noinline int security_ipc_permission(struct kern_ipc_perm *ipcp, short flag)
@@ -349,10 +376,78 @@ __nocfi noinline void __audit_mq_getsetattr(mqd_t mqdes, struct mq_attr *mqstat)
 		droid_lkm_ks.__audit_mq_getsetattr(mqdes, mqstat);
 }
 
-
 int droid_lkm_overcommit_memory(void)
 {
 	return droid_lkm_ks_sysctl_overcommit_memory ?
 		       READ_ONCE(*droid_lkm_ks_sysctl_overcommit_memory) :
 		       OVERCOMMIT_GUESS;
 }
+
+/*
+ * helpers the kernel carries but 6.18 keeps in a namespace, trims out of the
+ * export table or marks protected. defining the kernel name in this module
+ * keeps the link away from the loader, so no namespace import decides whether
+ * the module loads, and the call goes through the resolved table. a NULL
+ * entry leaves only the feature that needs it degraded
+ */
+__nocfi noinline struct dentry *d_splice_alias(struct inode *inode,
+					       struct dentry *dentry)
+{
+	if (droid_lkm_ks.d_splice_alias)
+		return droid_lkm_ks.d_splice_alias(inode, dentry);
+	/* a lookup dentry is unhashed, d_add is the no-alias instantiation */
+	d_add(dentry, inode);
+	return NULL;
+}
+
+#ifdef CONFIG_MULTIUSER
+__nocfi noinline int in_group_p(kgid_t grp)
+{
+	if (droid_lkm_ks.in_group_p)
+		return droid_lkm_ks.in_group_p(grp);
+	return 0;
+}
+#endif
+
+__nocfi noinline void ihold(struct inode *inode)
+{
+	if (droid_lkm_ks.ihold)
+		droid_lkm_ks.ihold(inode);
+}
+
+__nocfi noinline void inc_nlink(struct inode *inode)
+{
+	if (droid_lkm_ks.inc_nlink)
+		droid_lkm_ks.inc_nlink(inode);
+}
+
+__nocfi noinline void drop_nlink(struct inode *inode)
+{
+	if (droid_lkm_ks.drop_nlink)
+		droid_lkm_ks.drop_nlink(inode);
+}
+
+__nocfi noinline void clear_inode(struct inode *inode)
+{
+	if (droid_lkm_ks.clear_inode)
+		droid_lkm_ks.clear_inode(inode);
+}
+
+__nocfi noinline void d_instantiate(struct dentry *dentry, struct inode *inode)
+{
+	if (droid_lkm_ks.d_instantiate)
+		droid_lkm_ks.d_instantiate(dentry, inode);
+}
+
+__nocfi noinline void inode_init_once(struct inode *inode)
+{
+	if (droid_lkm_ks.inode_init_once)
+		droid_lkm_ks.inode_init_once(inode);
+}
+
+/*
+ * data, not a function: from_kgid_munged() reads it through an inline the
+ * module cannot intercept, so the local copy is filled from the kernel address
+ * in droid_lkm_ksym_init() before any module code runs
+ */
+typeof(overflowgid) overflowgid;

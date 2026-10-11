@@ -244,6 +244,41 @@ int droid_lkm_ksym_init(void)
 			      "an ipc sysctl table cannot be withdrawn and stays in /proc/sys");
 	DROID_LKM_THUNK_MAYBE(copy_ipcs, "copy_ipcs",
 			      "a kernel owned ipc namespace cannot be copied, it is refused instead");
+
+	/*
+	 * present in the running kernel but kept out of the plain export table
+	 * on 6.18, where they sit in the ANDROID_GKI_VFS namespace and are
+	 * trimmed or protected. the shims in this module define these names, so
+	 * the link never asks the loader for them
+	 */
+	DROID_LKM_THUNK_MAYBE(d_splice_alias, "d_splice_alias",
+			      "the container /proc/<pid>/ns entries are never instantiated");
+	DROID_LKM_THUNK_MAYBE(in_group_p, "in_group_p",
+			      "ipc permission checks never match a supplementary group");
+	DROID_LKM_THUNK_MAYBE(ihold, "ihold",
+			      "removing a named message queue takes no inode reference");
+	DROID_LKM_THUNK_MAYBE(inc_nlink, "inc_nlink",
+			      "a message queue directory never gains its link count");
+	DROID_LKM_THUNK_MAYBE(drop_nlink, "drop_nlink",
+			      "a removed message queue directory keeps its link count");
+	DROID_LKM_THUNK_MAYBE(clear_inode, "clear_inode",
+			      "evicting a message queue inode leaves its state behind");
+	DROID_LKM_THUNK_MAYBE(d_instantiate, "d_instantiate",
+			      "a new message queue dentry is never bound to its inode");
+	DROID_LKM_THUNK_MAYBE(inode_init_once, "inode_init_once",
+			      "message queue inodes are never initialized");
+	DROID_LKM_THUNK_MAYBE(simple_inode_init_ts, "simple_inode_init_ts",
+			      "a new message queue inode keeps zero timestamps");
+	DROID_LKM_THUNK_MAYBE(overflowgid_addr, "overflowgid",
+			      "an unmapped ipc gid reports 0 instead of the kernel value");
+
+	/*
+	 * overflowgid is data: from_kgid_munged() reads it through an inline the
+	 * module cannot intercept, so the module copy is filled from the kernel
+	 * address resolved above before any module code runs
+	 */
+	if (droid_lkm_ks.overflowgid_addr)
+		overflowgid = *droid_lkm_ks.overflowgid_addr;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
 	/*
 	 * register_sysctl is the one entry point before 6.1. from 6.1 on it is a

@@ -6,6 +6,7 @@
 #define DROID_LKM_IPC_MQUEUE_COMPAT_H
 
 #include <linux/types.h>
+#include "ds_ksym.h"
 #include <linux/ipc_namespace.h>
 #include <linux/fs.h>
 #include <linux/fs_context.h>
@@ -38,7 +39,13 @@
 static inline void droid_lkm_mq_inode_init_ts(struct inode *inode)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
-	simple_inode_init_ts(inode);
+	/*
+	 * 6.18 marks simple_inode_init_ts protected and declares it inline, so it
+	 * is called through the resolved pointer: a kernel that refuses it leaves
+	 * the timestamps as the allocator left them
+	 */
+	if (droid_lkm_ks.simple_inode_init_ts)
+		droid_lkm_ks.simple_inode_init_ts(inode);
 #else
 	inode->i_mtime = inode->i_ctime = inode->i_atime = current_time(inode);
 #endif
@@ -83,6 +90,8 @@ static inline int droid_lkm_mq_vfs_unlink(struct dentry *dentry)
 }
 
 extern typeof(&getname) droid_lkm_p_getname;
+extern struct filename *(*droid_lkm_p_getname_uflags)(const char __user *filename,
+						      int uflags);
 extern typeof(&putname) droid_lkm_p_putname;
 extern typeof(&get_next_ino) droid_lkm_p_get_next_ino;
 extern typeof(&vfs_mkobj) droid_lkm_p_vfs_mkobj;
@@ -100,7 +109,19 @@ struct ucounts *droid_lkm_mq_ucounts_get(void);
 long droid_lkm_mq_ucounts_charge(struct ucounts *ucounts, unsigned long bytes);
 void droid_lkm_mq_ucounts_uncharge(struct ucounts *ucounts, unsigned long bytes);
 void droid_lkm_mq_ucounts_put(struct ucounts *ucounts);
-extern typeof(&netlink_getsockbyfilp) droid_lkm_p_netlink_getsockbyfilp;
+/*
+ * 6.18 replaced netlink_getsockbyfilp(struct file *) with
+ * netlink_getsockbyfd(int fd): the caller holds the fd, so the fd form is
+ * preferred when the running kernel carries it
+ */
+/*
+ * the kernel declares these itself before 6.18, the shim defines them on
+ * every version, so the declarations live here for the versions that need them
+ */
+struct sock;
+struct file;
+extern struct sock *(*droid_lkm_p_netlink_getsockbyfilp)(struct file *filp);
+extern struct sock *(*droid_lkm_p_netlink_getsockbyfd)(int fd);
 extern typeof(&netlink_attachskb) droid_lkm_p_netlink_attachskb;
 extern typeof(&netlink_sendskb) droid_lkm_p_netlink_sendskb;
 extern typeof(&netlink_detachskb) droid_lkm_p_netlink_detachskb;
@@ -110,7 +131,18 @@ extern typeof(&get_compat_sigevent) droid_lkm_p_get_compat_sigevent;
 #define get_compat_sigevent(e, u) droid_lkm_p_get_compat_sigevent((e), (u))
 #endif
 
-#define getname(f)			droid_lkm_p_getname(f)
+/*
+ * 6.18 replaced getname(name) with getname_uflags(name, 0): both answer the
+ * same filename, so the newer name is asked when the old one is gone
+ */
+static inline struct filename *droid_lkm_getname(const char __user *name)
+{
+	if (droid_lkm_p_getname)
+		return droid_lkm_p_getname(name);
+	if (droid_lkm_p_getname_uflags)
+		return droid_lkm_p_getname_uflags(name, 0);
+	return ERR_PTR(-ENOSYS);
+}
 #define putname(n)			droid_lkm_p_putname(n)
 #define get_next_ino()			droid_lkm_p_get_next_ino()
 #define vfs_mkobj(d, m, f, a)		droid_lkm_p_vfs_mkobj((d), (m), (f), (a))
@@ -123,7 +155,6 @@ extern typeof(&get_compat_sigevent) droid_lkm_p_get_compat_sigevent;
 #define netlink_detachskb(s, b)		droid_lkm_p_netlink_detachskb((s), (b))
 #define schedule_hrtimeout_range_clock(e, d, m, c) \
 					droid_lkm_p_schedule_hrtimeout_range_clock((e), (d), (m), (c))
-
 
 #define simple_statfs		droid_lkm_mq_simple_statfs
 #define simple_lookup		droid_lkm_mq_simple_lookup
@@ -139,7 +170,6 @@ int droid_lkm_mqueue_shim_init(void);
 bool droid_lkm_mqueue_ready(void);
 void droid_lkm_mqueue_shim_retract(void);
 
-
 #define DROID_LKM_DFLT_QUEUESMAX	256
 #define DROID_LKM_MIN_MSGMAX		1
 #define DROID_LKM_DFLT_MSG		10U
@@ -149,7 +179,6 @@ void droid_lkm_mqueue_shim_retract(void);
 #define DROID_LKM_DFLT_MSGSIZE		8192U
 #define DROID_LKM_DFLT_MSGSIZEMAX	8192
 #define DROID_LKM_HARD_MSGSIZEMAX	(16 * 1024 * 1024)
-
 
 int droid_lkm_mq_init_ns(struct ipc_namespace *ns);
 void droid_lkm_mq_clear_sbinfo(struct ipc_namespace *ns);

@@ -317,7 +317,6 @@ static inline void shm_rmid(struct shmid_kernel *s)
 	ipc_rmid(&shm_ids(s->ns), &s->shm_perm);
 }
 
-
 static int __shm_open(struct shm_file_data *sfd)
 {
 	struct shmid_kernel *shp;
@@ -640,7 +639,11 @@ static int shm_mmap(struct file *file, struct vm_area_struct *vma)
 	if (ret)
 		return ret;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	ret = vfs_mmap(sfd->file, vma);
+#else
 	ret = call_mmap(sfd->file, vma);
+#endif
 	if (ret) {
 		__shm_close(sfd);
 		return ret;

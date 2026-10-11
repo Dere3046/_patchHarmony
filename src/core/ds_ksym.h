@@ -3,7 +3,6 @@
  * Copyright (C) 2026 dere3046
  */
 
-
 #ifndef DROID_LKM_KSYM_H
 #define DROID_LKM_KSYM_H
 
@@ -23,6 +22,7 @@ struct vma_iterator;
 #include <linux/percpu_counter.h>
 #include <linux/mm.h>
 #include <linux/fs.h>
+#include <linux/uidgid.h>
 
 struct nsproxy;
 struct task_struct;
@@ -47,6 +47,8 @@ struct ipc_ids;
 struct inode;
 struct dentry;
 struct dentry_operations;
+struct list_lru;
+struct kmem_cache;
 struct rw_semaphore;
 struct kprobe;
 struct proc_ns_operations;
@@ -57,17 +59,13 @@ struct droid_lkm_ksym {
 	int (*proc_alloc_inum)(unsigned int *inum);
 	void (*proc_free_inum)(unsigned int inum);
 
-
 	void (*disable_pid_allocation)(struct pid_namespace *ns);
-
 
 	int (*group_send_sig_info)(int sig, struct kernel_siginfo *info,
 				   struct task_struct *p, enum pid_type type);
 
-
 	long (*kernel_wait4)(pid_t upid, int __user *stat_addr, int options,
 			     struct rusage __user *ru);
-
 
 	unsigned long (*do_mmap_legacy)(struct file *file, unsigned long addr,
 					unsigned long len, unsigned long prot,
@@ -79,11 +77,9 @@ struct droid_lkm_ksym {
 				 unsigned long pgoff, unsigned long *populate,
 				 struct list_head *uf);
 
-
 	void (*wake_q_add)(struct wake_q_head *head, struct task_struct *task);
 	void (*wake_q_add_safe)(struct wake_q_head *head, struct task_struct *task);
 	void (*wake_up_q)(struct wake_q_head *head);
-
 
 	int (*schedule_hrtimeout_range)(ktime_t *expires, u64 delta,
 					const enum hrtimer_mode mode);
@@ -91,9 +87,7 @@ struct droid_lkm_ksym {
 			      const struct __kernel_timespec __user *uts);
 	int (*get_old_timespec32)(struct timespec64 *ts, const void __user *uts);
 
-
 	s64 (*__percpu_counter_sum)(struct percpu_counter *fbc);
-
 
 	int (*shmem_lock)(struct file *file, int lock,
 			  DROID_LKM_SHMEM_LOCK_PARAM);
@@ -113,7 +107,6 @@ struct droid_lkm_ksym {
 			     unsigned long start, size_t len,
 			     struct list_head *uf, bool unlock);
 
-
 	void (*switch_task_namespaces)(struct task_struct *p, struct nsproxy *new);
 
 	/*
@@ -130,7 +123,6 @@ struct droid_lkm_ksym {
 	int (*get_tree_nodev)(struct fs_context *fc,
 			      int (*fill_super)(struct super_block *sb,
 						struct fs_context *fc));
-
 
 	int (*security_ipc_permission)(struct kern_ipc_perm *ipcp, short flag);
 	int (*security_mmap_file)(struct file *file, unsigned long prot,
@@ -234,6 +226,26 @@ struct droid_lkm_ksym {
 	struct ipc_namespace *(*copy_ipcs)(unsigned long flags,
 					   struct user_namespace *user_ns,
 					   struct ipc_namespace *ns);
+
+	/*
+	 * VFS and ipc helpers 6.18 keeps in a namespace and trims out of the
+	 * plain export table. the module defines each kernel name itself, so the
+	 * link never asks the loader for one, and the call goes through this
+	 * table: a NULL entry degrades the one feature that needs it
+	 */
+	/* helpers 6.18 keeps in a namespace and trims or protects */
+	struct dentry *(*d_splice_alias)(struct inode *inode,
+					 struct dentry *dentry);
+	int (*in_group_p)(kgid_t grp);
+	void (*ihold)(struct inode *inode);
+	void (*inc_nlink)(struct inode *inode);
+	void (*drop_nlink)(struct inode *inode);
+	void (*clear_inode)(struct inode *inode);
+	void (*d_instantiate)(struct dentry *dentry, struct inode *inode);
+	void (*inode_init_once)(struct inode *inode);
+	/* protected on 6.18 instead of trimmed, and it answers the stamp it set */
+	struct timespec64 (*simple_inode_init_ts)(struct inode *inode);
+	int *overflowgid_addr;
 
 	/*
 	 * the hook engine patches text through the fixmap and resolves these

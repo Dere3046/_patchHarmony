@@ -80,7 +80,9 @@ const struct proc_ns_operations *droid_lkm_ns_ops_alias(const char *name,
 	strscpy(alias->name, name, sizeof(alias->name));
 	alias->ops.name = alias->name;
 	alias->ops.real_ns_name = NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	alias->ops.type = type;
+#endif
 	alias->ops.get = droid_lkm_ns_neutral_get;
 	alias->ops.put = droid_lkm_ns_neutral_put;
 	alias->ops.install = droid_lkm_ns_neutral_install;
@@ -112,7 +114,9 @@ void droid_lkm_ns_neutralize(struct ns_common *ns, const struct proc_ns_operatio
 	 * are only decremented by put paths that do not exist without
 	 * CONFIG_PID_NS and CONFIG_IPC_NS, so the pin is only needed from 5.15
 	 */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	refcount_set(&ns->__ns_ref, DROID_LKM_NS_LEAK_REFCOUNT);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 	refcount_set(&ns->count, DROID_LKM_NS_LEAK_REFCOUNT);
 #endif
 	ns->ops = ops;
@@ -185,7 +189,9 @@ static struct proc_ns_operations *droid_lkm_host_ops_build(const char *name,
 	} else {
 		b->ops.real_ns_name = NULL;
 	}
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	b->ops.type = CLONE_NEWPID;
+#endif
 	b->ops.get = droid_lkm_host_pid_get;
 	b->ops.put = droid_lkm_host_ns_put;
 	b->ops.install = droid_lkm_host_pid_install;
@@ -222,7 +228,7 @@ int droid_lkm_ns_ops_host_init(void)
 	ns->ns.inum = PROC_PID_INIT_INO;
 	refcount_set(droid_lkm_pidns_refcount(ns), DROID_LKM_NS_LEAK_REFCOUNT);
 
-	ns->ns.ops = droid_lkm_host_pid_ops_built;
+	droid_lkm_ns_set_ops(&ns->ns, droid_lkm_host_pid_ops_built, CLONE_NEWPID);
 	droid_lkm_host_pid_ns_object = ns;
 
 	droid_lkm_info("host pid ns placeholder ready (inum=%u)\n", ns->ns.inum);

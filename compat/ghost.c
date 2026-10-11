@@ -22,6 +22,9 @@
 #include "type_info.h"
 #include <linux/btf.h>
 
+/* 6.18 builds with -Wmissing-prototypes */
+__nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr);
+
 #define DLC_GHOST_TASK_COMM	"ghost-task-sentinel"
 #define DLC_GHOST_LOG_MAX	3
 
@@ -174,7 +177,6 @@ static void *dlc_ghost_at(unsigned int field)
 	return (char *)&dlc_ghost_task + dlc_ghost_offs[field];
 }
 
-
 // ghost is a shallow copy of init_task, list heads re-init to self
 static int dlc_ghost_build(void)
 {
@@ -314,7 +316,6 @@ int dlc_ghost_init(void)
 		return ret;
 	}
 	dlc_ghost_audit_pid_max();
-
 
 	dlc_module_address = (typeof(dlc_module_address))dlc_ghost_sym("__module_address");
 	if (!dlc_module_address) {
