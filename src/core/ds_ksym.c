@@ -105,7 +105,13 @@ int droid_lkm_ksym_init(void)
 		 typeof(droid_lkm_ks.mnt_want_write));
 	DROID_LKM_THUNK(mnt_drop_write, "mnt_drop_write",
 		 typeof(droid_lkm_ks.mnt_drop_write));
-	DROID_LKM_THUNK(lookup_one_len, "lookup_one_len",
+	/*
+	 * 6.18 removed lookup_one_len and left lookup_one_qstr_excl in its place,
+	 * so that branch carries no symbol by the old name. the shim defines the
+	 * kernel name over the surviving entry point, which is why this one is
+	 * resolved optionally instead of reported as a missing thunk.
+	 */
+	DROID_LKM_THUNK_OPT(lookup_one_len, "lookup_one_len",
 		 typeof(droid_lkm_ks.lookup_one_len));
 	DROID_LKM_THUNK(get_tree_nodev, "get_tree_nodev",
 		 typeof(droid_lkm_ks.get_tree_nodev));
@@ -168,10 +174,14 @@ int droid_lkm_ksym_init(void)
 		 typeof(droid_lkm_ks.__audit_mq_getsetattr));
 
 	/*
-	 * missing on 5.10 only, where the shim drops the mqueue rlimit
-	 * accounting instead of the queues, so the warning is the signal
+	 * put_ucounts and the two rlimit helpers are exported on every branch
+	 * that has the machinery. get_ucounts is the exception: 6.18 moved it
+	 * into user_namespace.h as an inline over rcuref_get, so the symbol is
+	 * gone and the mqueue shim calls that inline instead. 5.10 has no rlimit
+	 * ucounts at all, there the shim drops the accounting and keeps the
+	 * queues.
 	 */
-	DROID_LKM_THUNK(ucounts_get, "get_ucounts",
+	DROID_LKM_THUNK_OPT(ucounts_get, "get_ucounts",
 		 typeof(droid_lkm_ks.ucounts_get));
 	DROID_LKM_THUNK(ucounts_put, "put_ucounts",
 		 typeof(droid_lkm_ks.ucounts_put));
