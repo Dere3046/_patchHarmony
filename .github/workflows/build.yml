@@ -41,10 +41,26 @@ jobs:
           git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
           scripts/fetch-deps.sh
 
+      - name: Debug layout
+        if: matrix.kmi == 'android14-6.1'
+        run: |
+          echo "KDIR=[$KDIR] KERNEL_SRC=[$KERNEL_SRC]"
+          ls "$KDIR" | head -30
+          ls -d "$KDIR"/include/linux >/dev/null 2>&1 && echo "HAVE include/linux" || echo "NO include/linux"
+          test -f "$KDIR"/include/linux/mnt_idmapping.h && echo "HAVE mnt_idmapping.h" || echo "NO mnt_idmapping.h"
+          test -f "$KDIR"/System.map && echo "HAVE System.map" || echo "NO System.map"
+          grep -c ' nop_mnt_idmap$' "$KDIR"/System.map 2>/dev/null || true
+
       - name: Build ${{ matrix.kmi }}
         run: |
           make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
           tail -5 build.log
+
+      - name: Debug artifacts
+        if: matrix.kmi == 'android14-6.1'
+        run: |
+          find out/${{ matrix.kmi }} -name '*.ko' -o -name '*.o' | sort | head -40
+          grep -nE 'droid_lkm_misc' build.log | head -20
 
       - name: Zero warning gate
         run: |
