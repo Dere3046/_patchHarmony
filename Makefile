@@ -37,12 +37,14 @@ obj-m += droid_lkm_toy.o
 droid_lkm_toy-y := toy/toy_main.o $(DEPS_OBJS_ALL)
 
 # fourth ko in the same Kbuild: the container scoped features the stock GKI was
-# built without -- devtmpfs and a user namespace. built unconditionally, and
-# deliberately not under DLKM_OPT: both are software only, nothing here needs
-# anything newer than the oldest KMI in the matrix. nop_mnt_idmap, which the
-# probe above keys on, is exactly the one userns path that degrades without it,
-# so it can not be the gate for the module that ships the rest of userns.
-obj-m += droid_lkm_misc.o
+# built without -- devtmpfs and a user namespace. gated on the header devtmpfs'
+# vfs calls are written against, not on a version, and deliberately not on
+# nop_mnt_idmap the way droid_lkm_compat is: that symbol is exactly the one
+# userns path that degrades without it, so it can not be the gate for the
+# module that ships the rest of userns. android13-5.10 predates idmapped mounts
+# and gets no droid_lkm_misc.ko, everything from 5.12 up builds.
+DLM_OPT := $(shell test -f $(KDIR)/include/linux/mnt_idmapping.h 2>/dev/null && echo m)
+obj-$(DLM_OPT) += droid_lkm_misc.o
 DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_ksym.o \
 	src/misc/misc_scope.o \

@@ -15,6 +15,10 @@ on:
 jobs:
   build-matrix:
     strategy:
+      # one KMI failing must not cancel the rest: the first round of this
+      # matrix reported one real failure and five cancels, which reads as
+      # five builds that were never tried
+      fail-fast: false
       matrix:
         kmi:
           - android13-5.10
