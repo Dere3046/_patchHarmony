@@ -224,8 +224,27 @@ static struct xt_match addrtype_mt_reg[] __read_mostly = {
 	}
 };
 
+/*
+ * every symbol this match can reach, checked once here. a match that is
+ * registered but can not resolve is a NULL call on the packet path, so a thunk
+ * the target kernel does not carry has to keep the match out of the table
+ * rather than arm it
+ */
+static bool droid_lkm_misc_xt_addrtype_ready(void)
+{
+	return droid_lkm_misc_ks.xt_register_matches &&
+	       droid_lkm_misc_ks.xt_unregister_matches &&
+	       droid_lkm_misc_ks.inet_dev_addr_type &&
+	       droid_lkm_misc_ks.ipv6_chk_addr &&
+	       droid_lkm_misc_ks.__ipv6_addr_type &&
+	       droid_lkm_misc_ks.__nf_ip6_route;
+}
+
 int droid_lkm_misc_xt_addrtype_init(void)
 {
+	if (!droid_lkm_misc_xt_addrtype_ready())
+		return -ENOENT;
+
 	return xt_register_matches(addrtype_mt_reg,
 				   ARRAY_SIZE(addrtype_mt_reg));
 }

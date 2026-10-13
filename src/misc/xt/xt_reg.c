@@ -37,10 +37,15 @@ int droid_lkm_misc_xt_init(void)
 	for (i = 0; i < ARRAY_SIZE(droid_lkm_misc_xt_items); i++) {
 		ret = droid_lkm_misc_xt_items[i].init();
 		if (ret) {
-			droid_lkm_misc_err("xt %s failed: %d\n",
+			/*
+			 * one match that can not arm is that match, not the ko.
+			 * a target kernel missing its symbols drops it here and
+			 * the report below says unsupported, without taking the
+			 * rest of the module down with it
+			 */
+			droid_lkm_misc_warn("xt %s skipped: %d\n",
 				droid_lkm_misc_xt_items[i].name, ret);
-			droid_lkm_misc_xt_exit();
-			return ret;
+			continue;
 		}
 		droid_lkm_misc_xt_registered++;
 		droid_lkm_misc_info("xt registered: %s\n",

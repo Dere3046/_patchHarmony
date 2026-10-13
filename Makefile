@@ -36,78 +36,25 @@ droid_lkm_compat-y := $(DLC_COMPAT_OBJS) $(DEPS_OBJS_ALL)
 obj-m += droid_lkm_toy.o
 droid_lkm_toy-y := toy/toy_main.o $(DEPS_OBJS_ALL)
 
-# droid_lkm_misc.o is not built yet, it is unfinished; re-enable it with the
-# line below once its sources are ready
-# obj-$(DLKM_OPT) += droid_lkm_misc.o
+# fourth ko in the same Kbuild: the container scoped features the stock GKI was
+# built without -- devtmpfs and a user namespace. built unconditionally, and
+# deliberately not under DLKM_OPT: both are software only, nothing here needs
+# anything newer than the oldest KMI in the matrix. nop_mnt_idmap, which the
+# probe above keys on, is exactly the one userns path that degrades without it,
+# so it can not be the gate for the module that ships the rest of userns.
+obj-m += droid_lkm_misc.o
 DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_ksym.o \
 	src/misc/misc_scope.o \
 	src/misc/misc_proc.o \
 	src/misc/xt/xt_reg.o \
 	src/misc/xt/xt_addrtype.o \
-	src/misc/xt/xt_AUDIT.o \
-	src/misc/xt/xt_CHECKSUM.o \
-	src/misc/xt/xt_CLASSIFY.o \
-	src/misc/xt/xt_cluster.o \
-	src/misc/xt/xt_cgroup.o \
-	src/misc/xt/xt_comment.o \
-	src/misc/xt/xt_connlabel.o \
-	src/misc/xt/xt_connlimit.o \
-	src/misc/xt/xt_conntrack.o \
-	src/misc/xt/xt_cpu.o \
-	src/misc/xt/xt_dccp.o \
-	src/misc/xt/xt_devgroup.o \
-	src/misc/xt/xt_dscp.o \
-	src/misc/xt/xt_DSCP.o \
-	src/misc/xt/xt_ecn.o \
-	src/misc/xt/xt_esp.o \
-	src/misc/xt/xt_hl.o \
-	src/misc/xt/xt_HL.o \
-	src/misc/xt/xt_HMARK.o \
-	src/misc/xt/xt_ipcomp.o \
-	src/misc/xt/xt_iprange.o \
-	src/misc/xt/xt_l2tp.o \
-	src/misc/xt/xt_LED.o \
-	src/misc/xt/xt_length.o \
-	src/misc/xt/xt_limit.o \
-	src/misc/xt/xt_LOG.o \
-	src/misc/xt/xt_mac.o \
-	src/misc/xt/xt_mark.o \
-	src/misc/xt/xt_MASQUERADE.o \
-	src/misc/xt/xt_multiport.o \
-	src/misc/xt/xt_nat.o \
-	src/misc/xt/xt_NETMAP.o \
-	src/misc/xt/xt_NFLOG.o \
-	src/misc/xt/xt_NFQUEUE.o \
-	src/misc/xt/xt_owner.o \
-	src/misc/xt/xt_pkttype.o \
-	src/misc/xt/xt_policy.o \
-	src/misc/xt/xt_quota.o \
-	src/misc/xt/xt_RATEEST.o \
-	src/misc/xt/xt_rateest.o \
-	src/misc/xt/xt_realm.o \
-	src/misc/xt/xt_sctp.o \
-	src/misc/xt/xt_SECMARK.o \
-	src/misc/xt/xt_socket.o \
-	src/misc/xt/xt_state.o \
-	src/misc/xt/xt_statistic.o \
-	src/misc/xt/xt_string.o \
-	src/misc/xt/xt_tcpmss.o \
-	src/misc/xt/xt_TCPMSS.o \
-	src/misc/xt/xt_TCPOPTSTRIP.o \
-	src/misc/xt/xt_tcpudp.o \
-	src/misc/xt/xt_TEE.o \
-	src/misc/xt/xt_time.o \
-	src/misc/xt/xt_TPROXY.o \
-	src/misc/xt/xt_TRACE.o \
-	src/misc/xt/xt_u32.o \
 	src/misc/devtmpfs/devtmpfs.o \
 	src/misc/userns/userns_core.o \
 	src/misc/userns/userns_map.o \
 	src/misc/userns/userns_cred.o \
 	src/misc/userns/userns_nsops.o \
 	src/misc/userns/userns_owner.o \
-	src/misc/userns/userns_ids.o \
 	src/misc/userns/userns_proc.o \
 	src/misc/userns/userns_selftest.o \
 	src/misc/userns/userns_captrace.o \
