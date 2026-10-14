@@ -19,6 +19,7 @@
 #include <asm/memory.h>
 
 #include "hk_patch.h"
+#include "hk_inline.h"
 #include "ds.h"
 
 DROID_LKM_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
@@ -38,6 +39,16 @@ static bool droid_lkm_ns_seen[4];
  * follow the field and not the intent
  */
 static bool droid_lkm_ns_hook_active;
+/*
+ * the same feature reached through kernel text. the lookup table is write
+ * protected on some devices (Xiaomi's XKIP, a pKVM component at EL2), and no
+ * EL1 writer reaches it there; the function the table points at is ordinary
+ * kernel text, and every other inline hook this module installs works on those
+ * very devices. the wrapper is the same droid_lkm_ns_lookup, only its origin
+ * changes: the trampoline of this hook instead of the table slot
+ */
+static struct hk_inline droid_lkm_nsdir_hook;
+static bool droid_lkm_nsdir_text;
 static const struct inode_operations *droid_lkm_ns_link_iops;
 static const struct dentry_operations *droid_lkm_pid_dop;
 static struct dentry *(*droid_lkm_orig_ns_lookup)(struct inode *dir,
@@ -388,11 +399,61 @@ int droid_lkm_proc_init(void)
 
 		if (!droid_lkm_ns_lookup_store((unsigned long *)&droid_lkm_ns_dir_iops->lookup,
 					      want)) {
-			droid_lkm_warn("proc ns hook: this kernel will not take the ns dir hook (iops=%px level=%d writable=%d), /proc/<pid>/ns/{pid,ipc} stay absent\n",
-				       droid_lkm_ns_dir_iops,
-				       hk_va_level((unsigned long)&droid_lkm_ns_dir_iops->lookup),
-				       hk_va_writable((unsigned long)&droid_lkm_ns_dir_iops->lookup));
-			droid_lkm_orig_ns_lookup = NULL;
+			int tret;
+
+			/*
+			 * the table is out of reach on that device, but what the table
+			 * holds is a pointer to a function, and the function is kernel
+			 * text, which the same device does allow this module to patch.
+			 * so the same feature is installed by wrapping the lookup
+			 * itself: the wrapper is this very same droid_lkm_ns_lookup,
+			 * only its origin changes from a table slot to a trampoline,
+			 * and every path below still applies
+			 */
+			tret = droid_lkm_hook_install(&droid_lkm_nsdir_hook,
+						      "proc_ns_dir_lookup",
+						      "droid_lkm_ns_lookup");
+			if (!tret)
+				droid_lkm_orig_ns_lookup =
+					(struct dentry *(*)(struct inode *,
+							    struct dentry *,
+							    unsigned int))
+					droid_lkm_nsdir_hook.orig;
+			if (tret || !droid_lkm_orig_ns_lookup) {
+				droid_lkm_warn("proc ns hook: the table is refused and a wrap of proc_ns_dir_lookup failed (%d), /proc/<pid>/ns/{pid,ipc} stay absent\n",
+					       tret);
+				droid_lkm_orig_ns_lookup = NULL;
+				droid_lkm_pidns_sysctl_init();
+				return 0;
+			}
+			/*
+			 * the wrap left a branch in kernel text that jumps into this
+			 * module. a table slot can be restored by hand if the module
+			 * goes away; this trampoline cannot, and the next reader of
+			 * /proc/<pid>/ns/pid would take the fall. pin, exactly like the
+			 * table route pins, and roll the hook back if the pin fails
+			 */
+			if (!try_module_get(THIS_MODULE)) {
+				droid_lkm_err("proc ns hook: cannot pin module for the text wrap, rolling it back\n");
+				hk_inline_unhook(&droid_lkm_nsdir_hook);
+				droid_lkm_orig_ns_lookup = NULL;
+				droid_lkm_pidns_sysctl_init();
+				return 0;
+			}
+			droid_lkm_nsdir_text = true;
+			droid_lkm_ns_hook_active = true;
+			droid_lkm_dbg("ns hook is permanent: module pinned (rmmod -> -EBUSY)\n");
+			droid_lkm_info("proc ns dir served by a wrap of proc_ns_dir_lookup (the lookup table is write protected here), orig=0x%lx\n",
+				       (unsigned long)droid_lkm_orig_ns_lookup);
+			{
+				struct path probe;
+				int pret = kern_path("/proc/self/ns/pid", 0, &probe);
+
+				if (!pret)
+					path_put(&probe);
+				droid_lkm_info("proc ns hook self test: /proc/self/ns/pid -> %d (%s)\n",
+						pret, pret ? "not served" : "served");
+			}
 			droid_lkm_pidns_sysctl_init();
 			return 0;
 		}
@@ -462,8 +523,13 @@ void droid_lkm_proc_exit(void)
 {
 	droid_lkm_pidns_sysctl_exit();
 
-	if (droid_lkm_ns_hook_active && droid_lkm_ns_dir_iops &&
-	    droid_lkm_orig_ns_lookup) {
+	if (droid_lkm_nsdir_text) {
+		hk_inline_unhook(&droid_lkm_nsdir_hook);
+		droid_lkm_nsdir_text = false;
+		droid_lkm_orig_ns_lookup = NULL;
+		droid_lkm_ns_hook_active = false;
+	} else if (droid_lkm_ns_hook_active && droid_lkm_ns_dir_iops &&
+		   droid_lkm_orig_ns_lookup) {
 		droid_lkm_patch_write(&droid_lkm_ns_dir_iops->lookup,
 			       (unsigned long)droid_lkm_orig_ns_lookup);
 		droid_lkm_orig_ns_lookup = NULL;
