@@ -28,6 +28,17 @@ __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr);
 #define DLC_GHOST_TASK_COMM	"ghost-task-sentinel"
 #define DLC_GHOST_LOG_MAX	3
 
+/*
+ * the task's own reference count starts here rather than at a small number.
+ * vendor code treats what find_task_by_vpid() answered as a task it owns, so
+ * get_task_struct() and put_task_struct() land on this object, and a fixed
+ * budget would eventually reach zero -- at which point the kernel's task
+ * freeing path runs over a static struct and drops init_task's cred, mm and
+ * nsproxy references on the way out. this is above any put count a device
+ * reaches, and below the refcount saturation sentinel
+ */
+#define DLC_GHOST_USAGE		(INT_MAX / 2)
+
 static bool dlc_ghost_enable = true;
 module_param_named(ghost, dlc_ghost_enable, bool, 0444);
 MODULE_PARM_DESC(ghost, "hand out a ghost task when find_task_by_vpid misses, default 1");
@@ -57,9 +68,17 @@ static inline int dlc_inline_hook(struct hk_inline *h, const char *sym,
 }
 
 static struct hk_inline dlc_ftbv_hook;
+/*
+ * one substitute task for every caller and every CPU. it is a shallow copy of
+ * init_task, so the pointers it carries -- cred, mm, nsproxy, sighand, signal
+ * -- are init_task's own: vendor code that takes or drops a reference on what
+ * find_task_by_vpid() answered is touching those. that is the part of this
+ * fixup worth knowing about, and DLC_GHOST_USAGE is what is done about the
+ * task's own count
+ */
 static struct task_struct dlc_ghost_task;
 static bool dlc_ghost_ready;
-static unsigned int dlc_ghost_hits;
+static atomic_t dlc_ghost_hits = ATOMIC_INIT(0);
 
 static unsigned long dlc_ghost_sym(const char *name)
 {
@@ -106,8 +125,7 @@ __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 		preempt_enable();
 		if (!match)
 			return task;
-		dlc_ghost_hits++;
-		if (dlc_ghost_hits <= DLC_GHOST_LOG_MAX)
+		if (atomic_inc_return(&dlc_ghost_hits) <= DLC_GHOST_LOG_MAX)
 			pr_info("[droid_lkm_compat] ghost: pid=%d caller=%pS -> %s\n",
 				(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM);
 		return &dlc_ghost_task;
@@ -208,7 +226,7 @@ static int dlc_ghost_build(void)
 	// init_task.thread_pid is init_struct_pid nr 0 so the vnr helpers agree
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_PID) = 0;
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_TGID) = 0;
-	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), 1000);
+	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), DLC_GHOST_USAGE);
 	dlc_ghost_ready = true;
 	return 0;
 }
