@@ -412,12 +412,23 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 		}
 		inode_unlock(d_inode(parent));
 
-		dput(parent);
+		/*
+		 * the old parent's reference is dropped only once this step
+		 * succeeded and next is about to become the new parent. dropping it
+		 * before the error test released it twice -- once here, once in the
+		 * dput(parent) the loop leaves through -- so a vfs_mkdir that failed
+		 * part way down a name put a dentry this module still held a
+		 * reference to. dput() takes the count to zero, dentry_unlink_inode()
+		 * clears d_inode, and every later step then reports the mount root
+		 * itself as having no inode, which is what the device log showed for
+		 * every device name before the report went down inside dput()
+		 */
 		if (err) {
 			dput(next);
 			break;
 		}
 
+		dput(parent);
 		parent = next;
 		s = slash + 1;
 	}
