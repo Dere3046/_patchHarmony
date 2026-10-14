@@ -155,6 +155,15 @@ struct droid_lkm_devtmpfs_req {
 
 static struct droid_lkm_devtmpfs_req *droid_lkm_devtmpfs_requests;
 
+/*
+ * latched when a request went unanswered past the timeout. the thread handle is
+ * deliberately left alone: only the unload path owns kthread_stop(), and it
+ * decides on the pointer this field holds, so clearing it from a submit would
+ * strand the thread with nobody left able to stop it. this flag is what stops
+ * the driver core from queueing more work behind a stuck worker
+ */
+static bool droid_lkm_devtmpfs_worker_lost;
+
 /* mount setup against teardown, so a release cannot kill the superblock mid mount */
 static DEFINE_MUTEX(droid_lkm_devtmpfs_lock);
 
@@ -185,6 +194,17 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	}
 
 	root = dget(s->s_root);
+	/*
+	 * reconfigure_single() is called with s_umount held and leaves it held, so
+	 * the success path has to release it here. the error path above hands the
+	 * lock to deactivate_locked_super(), which is the "locked" variant and
+	 * drops it itself. without this the first userspace mount of devtmpfs
+	 * leaves the internal superblock write locked for good, and every later
+	 * superblock operation -- the next mount, kern_unmount() from release or
+	 * from unload -- blocks in down_write(&s->s_umount) with nothing to time
+	 * it out
+	 */
+	up_write(&s->s_umount);
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
 
 	return root;
@@ -237,7 +257,7 @@ static int droid_lkm_devtmpfs_submit(const char *name, umode_t mode, kuid_t uid,
 	init_completion(&req->done);
 
 	spin_lock(&droid_lkm_devtmpfs_req_lock);
-	if (!droid_lkm_devtmpfs_thread) {
+	if (!droid_lkm_devtmpfs_thread || droid_lkm_devtmpfs_worker_lost) {
 		spin_unlock(&droid_lkm_devtmpfs_req_lock);
 		kfree(tmp);
 		kfree(req);
@@ -251,9 +271,11 @@ static int droid_lkm_devtmpfs_submit(const char *name, umode_t mode, kuid_t uid,
 
 	if (!wait_for_completion_timeout(&req->done, DROID_LKM_DEVTMPFS_REQ_TIMEOUT)) {
 		/* a worker that never answered will not answer the queued ones either */
-		droid_lkm_misc_err("devtmpfs: %s went unanswered, the worker is gone\n", name);
+		droid_lkm_misc_err("devtmpfs: %s went unanswered, the worker is stalled\n", name);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "worker stalled");
-		droid_lkm_devtmpfs_thread = NULL;
+		spin_lock(&droid_lkm_devtmpfs_req_lock);
+		droid_lkm_devtmpfs_worker_lost = true;
+		spin_unlock(&droid_lkm_devtmpfs_req_lock);
 		droid_lkm_devtmpfs_drain();
 		/*
 		 * both req and tmp are left behind on purpose: a worker that is only
