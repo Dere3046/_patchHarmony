@@ -30,6 +30,8 @@ DROID_LKM_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 static struct inode_operations *droid_lkm_ns_dir_iops;
 static const struct inode_operations *droid_lkm_ns_link_iops;
 static const struct dentry_operations *droid_lkm_pid_dop;
+static struct hk_redir droid_lkm_nsdir_redir;
+static bool droid_lkm_nsdir_kprobe;
 static struct dentry *(*droid_lkm_orig_ns_lookup)(struct inode *dir,
 					   struct dentry *dentry,
 					   unsigned int flags);
@@ -92,7 +94,7 @@ static enum droid_lkm_ns_kind droid_lkm_ns_name_kind(const char *name, unsigned 
 static const struct droid_lkm_ns_kind_reg *droid_lkm_ns_kinds[DROID_LKM_NS_KIND_MAX];
 static DEFINE_MUTEX(droid_lkm_ns_kinds_lock);
 
-int droid_lkm_ns_kind_register(const struct droid_lkm_ns_kind_reg *kind)
+DROID_LKM_ENTRY int droid_lkm_ns_kind_register(const struct droid_lkm_ns_kind_reg *kind)
 {
 	int i;
 
@@ -118,7 +120,7 @@ int droid_lkm_ns_kind_register(const struct droid_lkm_ns_kind_reg *kind)
 }
 EXPORT_SYMBOL_GPL(droid_lkm_ns_kind_register);
 
-void droid_lkm_ns_kind_unregister(const struct droid_lkm_ns_kind_reg *kind)
+DROID_LKM_ENTRY void droid_lkm_ns_kind_unregister(const struct droid_lkm_ns_kind_reg *kind)
 {
 	int i;
 
@@ -283,11 +285,30 @@ int droid_lkm_proc_init(void)
 
 	ret = droid_lkm_patch_write(&droid_lkm_ns_dir_iops->lookup, (unsigned long)droid_lkm_ns_lookup);
 	if (ret) {
-		droid_lkm_err("cannot patch ns dir lookup: %d\n", ret);
-		return ret;
+		unsigned long field = (unsigned long)&droid_lkm_ns_dir_iops->lookup;
+
+		/* the writer said no: name the field, the page and the alias it tried */
+		droid_lkm_warn("cannot patch ns dir lookup: %d (field=0x%016lx level=%d writable=%d pa=0x%lx iops=0x%016lx)\n",
+			       ret, field, hk_va_level(field), hk_va_writable(field),
+			       hk_va_to_pa(field), (unsigned long)droid_lkm_ns_dir_iops);
+
+		/* a guarded page still serves the entry through a kprobe redirect */
+		ret = hk_redir_install(&droid_lkm_nsdir_redir, "proc_ns_dir_lookup",
+				       "droid_lkm_ns_lookup", HK_REDIR_KPROBE);
+		if (ret) {
+			droid_lkm_warn("proc ns hook: the table is refused and the kprobe route failed (%d), /proc/<pid>/ns/{pid,ipc} stay absent\n",
+				       ret);
+			droid_lkm_orig_ns_lookup = NULL;
+			droid_lkm_pidns_sysctl_init();
+			return 0;
+		}
+		droid_lkm_nsdir_kprobe = true;
+		droid_lkm_orig_ns_lookup = (void *)droid_lkm_nsdir_redir.orig;
+		droid_lkm_info("proc ns lookup hooked through a kprobe (orig=0x%016lx)\n",
+			       (unsigned long)droid_lkm_orig_ns_lookup);
 	}
 
-	droid_lkm_info("proc ns lookup hooked (orig=0x%lx)\n",
+	droid_lkm_info("proc ns lookup hooked (orig=0x%016lx)\n",
 		(unsigned long)droid_lkm_orig_ns_lookup);
 
 	if (!try_module_get(THIS_MODULE)) {

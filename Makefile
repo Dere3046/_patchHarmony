@@ -23,7 +23,7 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # feature that only the newer GKI branches carry instead of naming a version.
 DLKM_OPT := $(shell grep -q ' nop_mnt_idmap$$' $(KDIR)/System.map 2>/dev/null && echo m)
 obj-$(DLKM_OPT) += droid_lkm_compat.o
-DLC_COMPAT_OBJS := compat/compat_main.o compat/ghost.o
+DLC_COMPAT_OBJS := compat/compat_main.o compat/ghost.o compat/ddl_hit.o
 ifeq ($(TEST),1)
 ccflags-y += -DCONFIG_DROID_LKM_SELFTEST
 DLC_COMPAT_OBJS += compat/selftest.o

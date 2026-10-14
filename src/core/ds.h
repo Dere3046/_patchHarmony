@@ -25,6 +25,9 @@ struct hk_inline;
 /* ipc side, refuses to load when the target kernel has no locked unmap entry */
 int droid_lkm_munmap_init(void);
 
+/* reached indirectly so the entry needs a bti landing pad on a real device */
+#define DROID_LKM_ENTRY __attribute__((target("branch-protection=bti")))
+
 #define droid_lkm_info(fmt, ...) pr_info("[" DROID_LKM_TAG "] " fmt, ##__VA_ARGS__)
 #define droid_lkm_warn(fmt, ...) pr_warn("[" DROID_LKM_TAG "] " fmt, ##__VA_ARGS__)
 #define droid_lkm_err(fmt, ...) pr_err("[" DROID_LKM_TAG "] " fmt, ##__VA_ARGS__)
@@ -75,7 +78,20 @@ void droid_lkm_keepalive_release(void);
  */
 static inline int droid_lkm_patch_write(void *dst, unsigned long val)
 {
-	return hk_patch_write(dst, val);
+	/*
+	 * one entry for data writes: the kernel fixmap slot first then the library
+	 * slot and the caller hears about it when neither lands
+	 */
+	struct hk_write w = { .nofault = true, .verify = true };
+	int ret;
+
+	w.slot = HK_SLOT_KERNEL;
+	ret = hk_write_run(dst, &val, sizeof(val), &w);
+	if (!ret)
+		return 0;
+
+	w.slot = HK_SLOT_LIBRARY;
+	return hk_write_run(dst, &val, sizeof(val), &w);
 }
 
 /*
@@ -88,6 +104,10 @@ extern bool droid_lkm_inline_hooks_on;
 
 int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
 			     const char *wrap);
+#include "hk_redir.h"
+
+int droid_lkm_hook_install_auto(struct hk_inline *h, struct hk_redir *r,
+				const char *sym, const char *wrap);
 int droid_lkm_hook_install(struct hk_inline *h, const char *sym,
 			   const char *wrap);
 int droid_lkm_hook_install_critical(struct hk_inline *h, const char *sym,

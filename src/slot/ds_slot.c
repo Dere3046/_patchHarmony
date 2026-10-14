@@ -36,7 +36,7 @@ struct droid_lkm_clone_ctx;
 __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags, struct droid_lkm_clone_ctx *ctx);
 __nocfi noinline void droid_lkm_clone_ctx_leave(struct droid_lkm_clone_ctx *ctx);
 __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags, struct task_struct *tsk, struct user_namespace *user_ns, struct fs_struct *fs);
-__nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *tsk);
+DROID_LKM_ENTRY __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *tsk);
 
 typedef long (*droid_lkm_syscall_fn)(const struct pt_regs *regs);
 
@@ -794,7 +794,7 @@ static int droid_lkm_nsproxy_hook_install(void)
 
 	droid_lkm_cnn_orig = (typeof(droid_lkm_cnn_orig))droid_lkm_cnn_hook.orig;
 	droid_lkm_cnn_hooked = true;
-	droid_lkm_info("nsproxy hook: create_new_namespaces 0x%lx wrapped (orig=0x%lx check_unshare_flags=0x%lx)\n",
+	droid_lkm_info("nsproxy hook: create_new_namespaces 0x%016lx wrapped (orig=0x%016lx check_unshare_flags=0x%lx)\n",
 		droid_lkm_cnn_hook.addr, droid_lkm_cnn_hook.orig,
 		(unsigned long)droid_lkm_check_unshare_flags_fn);
 	return 0;
@@ -1003,7 +1003,7 @@ static int droid_lkm_copy_namespaces_hook_install(void)
 
 	droid_lkm_cn_orig = (typeof(droid_lkm_cn_orig))droid_lkm_cn_hook.orig;
 	droid_lkm_cn_hooked = true;
-	droid_lkm_info("ns hook: copy_namespaces 0x%lx wrapped (orig=0x%lx)\n",
+	droid_lkm_info("ns hook: copy_namespaces 0x%016lx wrapped (orig=0x%016lx)\n",
 		droid_lkm_cn_hook.addr, droid_lkm_cn_hook.orig);
 	return 0;
 }

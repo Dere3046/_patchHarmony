@@ -192,7 +192,7 @@ static bool droid_lkm_status_insert(struct seq_file *m, struct task_struct *task
 	return true;
 }
 
-__nocfi noinline int droid_lkm_status_wrap(struct seq_file *m,
+DROID_LKM_ENTRY __nocfi noinline int droid_lkm_status_wrap(struct seq_file *m,
 					   struct pid_namespace *ns,
 					   struct pid *pid,
 					   struct task_struct *task)
@@ -280,7 +280,7 @@ int droid_lkm_status_init(void)
 		droid_lkm_warn("NSpid emulation: block is appended at the end of the file (nspid_append=1)\n");
 	else
 		droid_lkm_warn("NSpid emulation: block is appended at the end, the seq_file offsets are not in BTF\n");
-	droid_lkm_info("NSpid emulation: proc_pid_status 0x%lx wrapped (orig=0x%lx)\n",
+	droid_lkm_info("NSpid emulation: proc_pid_status 0x%016lx wrapped (orig=0x%016lx)\n",
 		       droid_lkm_status_hook.addr, droid_lkm_status_hook.orig);
 	return 0;
 }

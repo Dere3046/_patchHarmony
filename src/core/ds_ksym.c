@@ -105,7 +105,7 @@ int droid_lkm_ksym_init(void)
 		 typeof(droid_lkm_ks.mnt_want_write));
 	DROID_LKM_THUNK(mnt_drop_write, "mnt_drop_write",
 		 typeof(droid_lkm_ks.mnt_drop_write));
-	DROID_LKM_THUNK(lookup_one_len, "lookup_one_len",
+	DROID_LKM_THUNK_OPT(lookup_one_len, "lookup_one_len",
 		 typeof(droid_lkm_ks.lookup_one_len));
 	DROID_LKM_THUNK(get_tree_nodev, "get_tree_nodev",
 		 typeof(droid_lkm_ks.get_tree_nodev));
@@ -171,7 +171,7 @@ int droid_lkm_ksym_init(void)
 	 * missing on 5.10 only, where the shim drops the mqueue rlimit
 	 * accounting instead of the queues, so the warning is the signal
 	 */
-	DROID_LKM_THUNK(ucounts_get, "get_ucounts",
+	DROID_LKM_THUNK_OPT(ucounts_get, "get_ucounts",
 		 typeof(droid_lkm_ks.ucounts_get));
 	DROID_LKM_THUNK(ucounts_put, "put_ucounts",
 		 typeof(droid_lkm_ks.ucounts_put));
@@ -232,8 +232,9 @@ int droid_lkm_ksym_init(void)
 			      "the ns_last_pid and /proc/self/ns/mnt lookups fail, those pidns steps are skipped");
 	DROID_LKM_THUNK_MAYBE(path_put, "path_put",
 			      "a path resolved by the module is never released");
-	DROID_LKM_THUNK_MAYBE(d_set_d_op, "d_set_d_op",
-			      "the container /proc dentries keep the kernel operations and stay cached longer");
+	/* the module carries its own body for this one, nothing is lost */
+	DROID_LKM_THUNK_OPT(d_set_d_op, "d_set_d_op",
+			    typeof(droid_lkm_ks.d_set_d_op));
 	DROID_LKM_THUNK_MAYBE(down_write_killable, "down_write_killable",
 			      "a killable mmap lock wait becomes uninterruptible");
 	DROID_LKM_THUNK_MAYBE(radix_tree_tagged, "radix_tree_tagged",

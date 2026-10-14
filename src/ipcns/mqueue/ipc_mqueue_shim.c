@@ -235,9 +235,14 @@ typeof(&get_compat_sigevent) droid_lkm_p_get_compat_sigevent;
 __nocfi noinline struct ucounts *droid_lkm_mq_ucounts_get(void)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-	if (!droid_lkm_ks.ucounts_get)
-		return NULL;
-	return droid_lkm_ks.ucounts_get(current_ucounts());
+	if (droid_lkm_ks.ucounts_get)
+		return droid_lkm_ks.ucounts_get(current_ucounts());
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	/* 6.18 keeps it as an inline over rcuref_get, compile the same body in */
+	return get_ucounts(current_ucounts());
+#else
+	return NULL;
+#endif
 #else
 	return NULL;
 #endif
@@ -384,9 +389,13 @@ __nocfi noinline int droid_lkm_mqueue_shim_init(void)
 		return -ENODATA;
 	}
 
-	if (!droid_lkm_ks.ucounts_get || !droid_lkm_ks.ucounts_put ||
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	/* get_ucounts is an inline here, the symbol test would drop the charge */
+	if (!droid_lkm_ks.ucounts_put ||
+!droid_lkm_ks.ucounts_put ||
 	    !droid_lkm_ks.ucounts_inc_rlimit || !droid_lkm_ks.ucounts_dec_rlimit)
 		droid_lkm_warn("mqueue: RLIMIT_MSGQUEUE accounting unavailable, queues not charged\n");
+#endif
 
 	droid_lkm_mqueue_shim_ok = true;
 	droid_lkm_dbg("mqueue shim: 12 unexported VFS/netlink/timer helpers resolved\n");

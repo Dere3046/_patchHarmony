@@ -10,6 +10,7 @@
  * changes how we hook belongs here rather than at a call site
  */
 #include "ds.h"
+#include "hk_redir.h"
 #include "hk_patch.h"
 
 bool droid_lkm_inline_hooks_on;
@@ -86,6 +87,37 @@ bool droid_lkm_hook_critical_ok(void)
 bool droid_lkm_degrade_enabled(void)
 {
 	return droid_lkm_degrade;
+}
+
+/*
+ * one entry for function hooks: write the entry first and let a write that did
+ * not take fall through to the kprobe route
+ */
+int droid_lkm_hook_install_auto(struct hk_inline *h, struct hk_redir *r,
+				const char *sym, const char *wrap)
+{
+	struct hk_inline_probe rep;
+	int ret;
+
+	ret = droid_lkm_do_inline_hook(h, sym, wrap);
+	if (!ret && h->orig) {
+		droid_lkm_dbg("hook %s: entry written\n", sym);
+		return 0;
+	}
+
+	if (!hk_inline_probe(sym, &rep))
+		droid_lkm_warn("hook %s: entry write did not take (%d) probe state %d, trying the kprobe route\n",
+			       sym, ret, (int)rep.state);
+	else
+		droid_lkm_warn("hook %s: entry write did not take (%d), trying the kprobe route\n",
+			       sym, ret);
+
+	ret = hk_redir_install(r, sym, wrap, HK_REDIR_KPROBE);
+	if (ret)
+		droid_lkm_err("hook %s: neither route took (%d)\n", sym, ret);
+	else
+		droid_lkm_info("hook %s: carried by a kprobe, the entry keeps its bytes\n", sym);
+	return ret;
 }
 
 int droid_lkm_hook_install(struct hk_inline *h, const char *sym,

@@ -10,6 +10,7 @@
 #include "core.h"
 #include "hk.h"
 #include "ghost.h"
+#include "ddl_hit.h"
 #ifdef CONFIG_DROID_LKM_SELFTEST
 #include "selftest.h"
 #endif
@@ -52,6 +53,9 @@ static int __init droid_lkm_compat_init(void)
 	// the fixup is why this module exists
 	// a silent miss leaves vendor callers with NULL
 	ret = dlc_ghost_init();
+
+	/* vendor ddl history bounds, data only */
+	(void)dlc_ddl_hit_init();
 	if (ret) {
 		pr_err("[droid_lkm_compat] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
 		       ret);
@@ -71,6 +75,7 @@ static void __exit droid_lkm_compat_exit(void)
 #ifdef CONFIG_DROID_LKM_SELFTEST
 	dlc_selftest_exit();
 #endif
+	dlc_ddl_hit_exit();
 	dlc_ghost_exit();
 	hk_exit();
 }
