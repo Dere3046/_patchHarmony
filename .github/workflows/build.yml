@@ -45,11 +45,13 @@ jobs:
         if: matrix.kmi == 'android14-6.1'
         run: |
           echo "KDIR=[$KDIR] KERNEL_SRC=[$KERNEL_SRC]"
-          ls "$KDIR" | head -30
-          ls -d "$KDIR"/include/linux >/dev/null 2>&1 && echo "HAVE include/linux" || echo "NO include/linux"
-          test -f "$KDIR"/include/linux/mnt_idmapping.h && echo "HAVE mnt_idmapping.h" || echo "NO mnt_idmapping.h"
-          test -f "$KDIR"/System.map && echo "HAVE System.map" || echo "NO System.map"
-          grep -c ' nop_mnt_idmap$' "$KDIR"/System.map 2>/dev/null || true
+          echo "--- source symlink ---"; readlink -f "$KDIR/source"
+          echo "--- KDIR/include ---"; ls "$KDIR/include"
+          echo "--- KDIR/Makefile head ---"; head -6 "$KDIR/Makefile"
+          echo "--- version ---"; grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) *=' "$KDIR/Makefile"
+          echo "--- mnt_idmapping.h under KDIR ---"; find "$KDIR" -name 'mnt_idmapping.h' 2>/dev/null | head
+          echo "--- real srctree include ---"; ls -d "$(readlink -f "$KDIR/source")/include/linux" 2>&1
+          echo "--- header under srctree ---"; test -f "$(readlink -f "$KDIR/source")/include/linux/mnt_idmapping.h" && echo HAVE || echo NO
 
       - name: Build ${{ matrix.kmi }}
         run: |

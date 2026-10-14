@@ -43,8 +43,8 @@ droid_lkm_toy-y := toy/toy_main.o $(DEPS_OBJS_ALL)
 # userns path that degrades without it, so it can not be the gate for the
 # module that ships the rest of userns. android13-5.10 predates idmapped mounts
 # and gets no droid_lkm_misc.ko, everything from 5.12 up builds.
-DLM_OPT := $(shell test -f $(KDIR)/include/linux/mnt_idmapping.h 2>/dev/null && echo m)
-obj-$(DLM_OPT) += droid_lkm_misc.o
+DLM_OPT := m
+obj-m += droid_lkm_misc.o
 DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_ksym.o \
 	src/misc/misc_scope.o \
