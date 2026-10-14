@@ -56,8 +56,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: droid_lkm-${{ matrix.kmi }}
-          path: |
-            out/${{ matrix.kmi }}/droid_lkm.ko
-            out/${{ matrix.kmi }}/droid_lkm_compat.ko
-            out/${{ matrix.kmi }}/droid_lkm_misc.ko
+          path: out/${{ matrix.kmi }}/droid_lkm.ko
           if-no-files-found: warn

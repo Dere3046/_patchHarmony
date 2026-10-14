@@ -20,6 +20,7 @@
 #include "ds_proc.h"
 #include "ds_slot.h"
 #include "ds_status.h"
+#include "ds_phase.h"
 #include "ipc_mqueue_compat.h"
 
 bool droid_lkm_verbose;
@@ -136,9 +137,17 @@ static int __init droid_lkm_init(void)
 	 */
 	droid_lkm_hook_policy_apply();
 
+	/*
+	 * the OPPO vendor fixup wants the engine, so it goes first. it used to
+	 * be a ko that refused to load when its hook would not install; in here
+	 * that refusal would take ipcns and the userns half down with a vendor
+	 * quirk, so it reports and the load goes on
+	 */
+	droid_lkm_compat_phase_init();
+
 	ret = droid_lkm_pidns_init();
 	if (ret)
-		goto err_hk;
+		goto err_compat;
 
 	ret = droid_lkm_ipcns_init();
 	if (ret)
@@ -167,6 +176,13 @@ static int __init droid_lkm_init(void)
 	if (ret)
 		droid_lkm_warn("NSpid emulation disabled: %d\n", ret);
 
+	/*
+	 * devtmpfs and the fake user namespace, and the last install site: the
+	 * namespace kind the fake user namespace registers hangs off the /proc
+	 * work droid_lkm_proc_init() just did
+	 */
+	droid_lkm_misc_phase_init();
+
 	/* every install site has run by now, so this is the load's hook verdict */
 	droid_lkm_hook_report();
 	droid_lkm_layout_report();
@@ -182,6 +198,7 @@ static int __init droid_lkm_init(void)
 	return 0;
 
 err_slot:
+	droid_lkm_misc_phase_exit();
 	droid_lkm_proc_exit();
 	droid_lkm_slot_exit();
 err_ipcns:
@@ -190,7 +207,8 @@ err_ipcns:
 	droid_lkm_mqueue_fs_teardown();
 err_pidns:
 	droid_lkm_pidns_exit();
-err_hk:
+err_compat:
+	droid_lkm_compat_phase_exit();
 	hk_exit();
 	return ret;
 }
@@ -203,6 +221,8 @@ static void __exit droid_lkm_exit(void)
 		droid_lkm_warn("live container state at unload; those objects will be leaked\n");
 
 	droid_lkm_status_exit();
+	/* the namespace kinds it registered have to go before the /proc trees do */
+	droid_lkm_misc_phase_exit();
 	droid_lkm_proc_exit();
 	droid_lkm_slot_exit();
 
@@ -212,6 +232,7 @@ static void __exit droid_lkm_exit(void)
 	droid_lkm_mqueue_fs_teardown();
 	droid_lkm_pidns_exit();
 	droid_lkm_keepalive_release();
+	droid_lkm_compat_phase_exit();
 	hk_exit();
 	droid_lkm_info("unloaded\n");
 }
@@ -220,6 +241,6 @@ module_init(droid_lkm_init);
 module_exit(droid_lkm_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Droidspaces kernel feature shim for stock GKI");
+MODULE_DESCRIPTION("Droidspaces kernel feature shim for stock GKI: namespace emulation, devtmpfs, a fake user namespace and the OPPO vendor fixups");
 MODULE_AUTHOR("dere3046");
-MODULE_VERSION("0.1.0");
+MODULE_VERSION("0.2.0");
