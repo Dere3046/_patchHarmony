@@ -93,46 +93,36 @@ jobs:
             exit 1
           fi
 
-      # the symbol version records the module carries, against the kernel's own
-      # table, so a CRC that disagrees is caught here instead of at insmod
+      # what the artifact carries, and the one check modpost cannot make for us:
+      # every symbol the module imports has to be in the kernel's export list, or
+      # insmod answers Unknown symbol. the crc records are reported rather than
+      # compared because this module gets them from the same Module.symvers modpost
+      # already read, so a comparison against it would only restate that read
       - name: Module ABI check
         run: |
           KO=out/${{ matrix.kmi }}/droid_lkm.ko
-          echo "--- vermagic ---"
-          modinfo -F vermagic "$KO" || true
-          : > mod-ver.txt
-          if ! command -v modprobe >/dev/null 2>&1; then
-            echo "no modprobe in this image, so the records cannot be dumped here."
-            echo "modpost's own version check is what the zero warning gate covers."
+          echo "vermagic: $(modinfo -F vermagic "$KO" 2>/dev/null)"
+          ver=$(readelf -S -W "$KO" 2>/dev/null | awk '/__versions/{print $6}')
+          echo "__versions size: ${ver:-0} bytes"
+          if ! command -v nm >/dev/null 2>&1; then
+            echo "no nm in this image, skipping the export list check"
             exit 0
           fi
-          modprobe --dump-modversions "$KO" 2>/dev/null \
-            | awk '{ c=$1; sub(/^0x/, "", c); print tolower(c), $2 }' \
-            | sort > mod-ver.txt || true
-          echo "--- versions the module carries: $(wc -l < mod-ver.txt) ---"
+          nm -u "$KO" | awk '{print $2}' | grep -v '^__crc_' | LC_ALL=C sort -u > mod-undef.txt
+          echo "symbols the module imports: $(wc -l < mod-undef.txt)"
           if [ ! -s "$KDIR/Module.symvers" ]; then
-            echo "the ddk carries no kernel Module.symvers, so modpost had no version"
-            echo "table to check the module against. that is the finding, not a failure."
+            echo "the ddk carries no Module.symvers, so there is no export list to check against"
             exit 0
           fi
-          awk '{ c=$1; sub(/^0x/, "", c); print tolower(c), $2 }' "$KDIR/Module.symvers" \
-            | sort > kern-ver.txt
-          fail=0
-          while read -r crc sym; do
-            want=$(awk -v s="$sym" '$2 == s { print $1; exit }' kern-ver.txt)
-            if [ -z "$want" ]; then
-              echo "MISSING from the kernel: $sym (module carries $crc)"
-              fail=1
-            elif [ "$want" != "$crc" ]; then
-              echo "CRC MISMATCH: $sym module=$crc kernel=$want"
-              fail=1
-            fi
-          done < mod-ver.txt
-          if [ "$fail" = 0 ]; then
-            echo "module ABI matches the kernel's Module.symvers"
-          else
+          awk '{print $2}' "$KDIR/Module.symvers" | LC_ALL=C sort -u > kern-syms.txt
+          echo "symbols this kernel exports: $(wc -l < kern-syms.txt)"
+          missing=$(comm -23 mod-undef.txt kern-syms.txt)
+          if [ -n "$missing" ]; then
+            echo "NOT exported by this kernel, insmod would refuse the module:"
+            echo "$missing"
             exit 1
           fi
+          echo "every imported symbol is exported by this kernel"
 
       - uses: actions/upload-artifact@v4
         with:
