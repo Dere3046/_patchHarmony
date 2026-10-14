@@ -13,6 +13,7 @@
 #include <linux/string.h>
 
 #include "core.h"
+#include "ds.h"
 
 #define DROID_LKM_MISC_TAG "droid_lkm_misc"
 
@@ -36,13 +37,19 @@ extern bool droid_lkm_misc_verbose;
  * back as the shim defined here. droid_lkm_sym() has always refused an address that
  * lands in this module for exactly that reason; misc resolves the same kind of names and
  * had no such rule, which hands a caller its own shim instead of the kernel symbol.
+ *
+ * what it has to refuse is a name the module carries for the kernel, so the test is the
+ * prefix the module's own symbols share -- its tag -- and not the misc tag. the misc half
+ * also looks up droid_lkm_ns_kind_register, an export of the main half, by name; that
+ * resolved inside the module, matched the narrower tag, and came back 0. the device log
+ * shows the cost: "userns unavailable: -19" on a kernel where the symbol was right there.
  */
 static inline unsigned long __nocfi droid_lkm_misc_sym(const char *name)
 {
 	unsigned long addr = kallrecon_klp(name);
 
 	if (addr && within_module(addr, THIS_MODULE) &&
-	    strncmp(name, DROID_LKM_MISC_TAG, sizeof(DROID_LKM_MISC_TAG) - 1))
+	    strncmp(name, DROID_LKM_TAG, sizeof(DROID_LKM_TAG) - 1))
 		return 0;
 	return addr;
 }
