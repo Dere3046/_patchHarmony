@@ -44,14 +44,11 @@ jobs:
       - name: Debug layout
         if: matrix.kmi == 'android14-6.1'
         run: |
-          echo "KDIR=[$KDIR] KERNEL_SRC=[$KERNEL_SRC]"
-          echo "--- source symlink ---"; readlink -f "$KDIR/source"
-          echo "--- KDIR/include ---"; ls "$KDIR/include"
-          echo "--- KDIR/Makefile head ---"; head -6 "$KDIR/Makefile"
-          echo "--- version ---"; grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) *=' "$KDIR/Makefile"
-          echo "--- mnt_idmapping.h under KDIR ---"; find "$KDIR" -name 'mnt_idmapping.h' 2>/dev/null | head
-          echo "--- real srctree include ---"; ls -d "$(readlink -f "$KDIR/source")/include/linux" 2>&1
-          echo "--- header under srctree ---"; test -f "$(readlink -f "$KDIR/source")/include/linux/mnt_idmapping.h" && echo HAVE || echo NO
+          echo "KDIR=[$KDIR]"
+          echo "source -> $(readlink -f "$KDIR/source")"
+          for p in "$KDIR/source/include/linux/mnt_idmapping.h" "$KDIR/include/linux/mnt_idmapping.h"; do
+            if test -f "$p"; then echo "HAVE $p"; else echo "NO   $p"; fi
+          done
 
       - name: Build ${{ matrix.kmi }}
         run: |
@@ -61,8 +58,10 @@ jobs:
       - name: Debug artifacts
         if: matrix.kmi == 'android14-6.1'
         run: |
-          find out/${{ matrix.kmi }} -name '*.ko' -o -name '*.o' | sort | head -40
-          grep -nE 'droid_lkm_misc' build.log | head -20
+          echo "--- ko files ---"
+          find out/${{ matrix.kmi }} -name '*.ko' | sort
+          echo "--- misc objects in log ---"
+          grep -cE 'src/misc/' build.log || true
 
       - name: Zero warning gate
         run: |
