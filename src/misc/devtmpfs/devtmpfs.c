@@ -187,7 +187,21 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	/* one instance for the whole system, the internal superblock */
 	s = droid_lkm_devtmpfs_mnt->mnt_sb;
 	atomic_inc(&s->s_active);
-	down_write(&s->s_umount);
+	/*
+	 * killable on purpose. an uninterruptible down_write leaves the mounting
+	 * task in D with SIGKILL unable to reach it, which is how a container whose
+	 * /dev is this filesystem became impossible to stop: the mount never
+	 * returned, systemd waited on it for good, and the only way out was a
+	 * reboot. an interrupted wait fails the mount with EINTR and leaves the
+	 * caller killable, which is the right answer for a lock that should not be
+	 * held in the first place. the shim falls back to down_write where the
+	 * kernel does not carry the killable variant
+	 */
+	if (down_write_killable(&s->s_umount)) {
+		atomic_dec(&s->s_active);
+		mutex_unlock(&droid_lkm_devtmpfs_lock);
+		return ERR_PTR(-EINTR);
+	}
 	err = droid_lkm_devtmpfs_ks.reconfigure_single(s, flags, data);
 	if (err < 0) {
 		droid_lkm_devtmpfs_ks.deactivate_locked_super(s);
@@ -887,8 +901,23 @@ int droid_lkm_misc_devtmpfs_init(void)
 		droid_lkm_devtmpfs_ks.shmem_init_fs_context;
 	droid_lkm_devtmpfs_internal_type.kill_sb = droid_lkm_devtmpfs_ks.kill_litter_super;
 
+	/*
+	 * SB_KERNMOUNT, the flag upstream's kern_mount() passes here and this call
+	 * used to leave at zero. an internal mount without it is an ordinary user
+	 * mount of an ordinary superblock, and the difference is visible on the
+	 * device: the walk that fills the tree reported
+	 *
+	 *     devtmpfs ready: 0 nodes
+	 *
+	 * with every vfs_mknod in it refused, and the internal superblock's write
+	 * lock was left held afterwards, which then wedged iterate_supers() (every
+	 * sync) and every later mount of devtmpfs for as long as the module stayed
+	 * loaded. a container whose /dev is this filesystem could not be stopped
+	 * because of it: its mount never returned. kern_mount() is the shape
+	 * upstream ships for exactly this object
+	 */
 	droid_lkm_devtmpfs_mnt = droid_lkm_devtmpfs_ks.vfs_kern_mount(
-		&droid_lkm_devtmpfs_internal_type, 0, "devtmpfs", opts);
+		&droid_lkm_devtmpfs_internal_type, SB_KERNMOUNT, "devtmpfs", opts);
 	if (IS_ERR(droid_lkm_devtmpfs_mnt)) {
 		err = PTR_ERR(droid_lkm_devtmpfs_mnt);
 		droid_lkm_devtmpfs_mnt = NULL;
