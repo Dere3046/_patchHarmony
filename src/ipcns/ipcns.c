@@ -545,8 +545,15 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 		}
 
 		if (e == &droid_lkm_ipcns_init_entry || droid_lkm_ipcns_is_host(e->ns)) {
-			
-			if (!droid_lkm_ipcns_in_use(e->ns))
+			/*
+			 * the ids of a namespace the kernel made, the host included, are
+			 * the kernel's: its own free_ipc_ns() takes them down. doing it
+			 * here is rhashtable_destroy() and idr_destroy() over the running
+			 * kernel's tables, and the host ipc layer keeps using destroyed id
+			 * tables once this module is gone
+			 */
+			if (!droid_lkm_ipcns_kernel_owned &&
+			    !droid_lkm_ipcns_in_use(e->ns))
 				droid_lkm_ipcns_destroy_ids(e->ns);
 			continue;
 		}
