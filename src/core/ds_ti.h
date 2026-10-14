@@ -70,6 +70,32 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_IPC_NS_MQ_SYSCTLS,
 	DROID_LKM_F_IPC_NS_IPC_SYSCTLS,
 #endif
+	/*
+	 * the vfs and driver core fields devtmpfs dereferences. every other struct
+	 * this module reads on a live kernel object goes through the ids above;
+	 * devtmpfs was the exception, reading struct dentry, inode, vfsmount,
+	 * super_block, device and kset with the build's own field offsets. a build
+	 * offset is only right when the running kernel places the field where the
+	 * headers do, and one field off is d_inode() answering with something that
+	 * is not an inode, or down_write() being handed an address that is not an
+	 * rwsem -- which is the fault that took the device down in
+	 * droid_lkm_devtmpfs_parent(). listing them here puts them under the same
+	 * build-versus-live comparison every namespace field already gets
+	 */
+	DROID_LKM_F_VFSMOUNT_MNT_ROOT,
+	DROID_LKM_F_VFSMOUNT_MNT_SB,
+	DROID_LKM_F_SUPER_S_ROOT,
+	DROID_LKM_F_SUPER_S_ACTIVE,
+	DROID_LKM_F_SUPER_S_UMOUNT,
+	DROID_LKM_F_DENTRY_D_INODE,
+	DROID_LKM_F_DENTRY_D_SB,
+	DROID_LKM_F_INODE_I_RWSEM,
+	DROID_LKM_F_INODE_I_PRIVATE,
+	DROID_LKM_F_DEVICE_KOBJ,
+	DROID_LKM_F_DEVICE_CLASS,
+	DROID_LKM_F_DEVICE_DEVT,
+	DROID_LKM_F_KSET_LIST,
+	DROID_LKM_F_KSET_LIST_LOCK,
 	DROID_LKM_FIELD_COUNT
 };
 
@@ -93,5 +119,14 @@ bool droid_lkm_layout_ok(enum droid_lkm_field_id id);
 
 // NULL when the field is refused
 void *droid_lkm_layout_ptr(void *base, enum droid_lkm_field_id id);
+
+/*
+ * true when the running kernel places every field in the list where this build
+ * does. *bad, when not NULL, is set to the member name of the first one that is
+ * not confirmed, so the refusal can name what the kernel does not agree about
+ * instead of only that it disagrees
+ */
+bool droid_lkm_layout_all_ok(const enum droid_lkm_field_id *ids, unsigned int n,
+			     const char **bad);
 
 #endif /* DROID_LKM_DS_TI_H */

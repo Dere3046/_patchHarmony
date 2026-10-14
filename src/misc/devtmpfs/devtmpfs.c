@@ -67,6 +67,7 @@
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "ds_caps.h"
+#include "ds_ti.h"
 #include "hk_inline.h"
 #include "devtmpfs.h"
 
@@ -448,19 +449,30 @@ static int droid_lkm_devtmpfs_handle_create(const char *nodename, umode_t mode,
 	if (!err) {
 		struct iattr newattrs;
 
-		newattrs.ia_mode = mode;
-		newattrs.ia_uid = uid;
-		newattrs.ia_gid = gid;
-		newattrs.ia_valid = ATTR_MODE | ATTR_UID | ATTR_GID;
-		/* notify_change wants the affected inode locked by its caller */
-		inode_lock(d_inode(dentry));
-		droid_lkm_devtmpfs_ks.notify_change(droid_lkm_caps.idmap_none, dentry, &newattrs,
-						    NULL);
-		inode_unlock(d_inode(dentry));
+		/*
+		 * vfs_mknod() instantiates the dentry, so this is not expected to be
+		 * negative; locking an inode that is not there is the fault this file
+		 * already took once, and the check costs nothing next to a down_write
+		 */
+		if (!d_inode(dentry)) {
+			droid_lkm_misc_warn("devtmpfs: %s: vfs_mknod left the dentry without an inode\n",
+					    nodename);
+			err = -EIO;
+		} else {
+			newattrs.ia_mode = mode;
+			newattrs.ia_uid = uid;
+			newattrs.ia_gid = gid;
+			newattrs.ia_valid = ATTR_MODE | ATTR_UID | ATTR_GID;
+			/* notify_change wants the affected inode locked by its caller */
+			inode_lock(d_inode(dentry));
+			droid_lkm_devtmpfs_ks.notify_change(droid_lkm_caps.idmap_none, dentry,
+							    &newattrs, NULL);
+			inode_unlock(d_inode(dentry));
 
-		/* mark as kernel-created inode */
-		d_inode(dentry)->i_private = &droid_lkm_devtmpfs_thread;
-		droid_lkm_devtmpfs_nodes++;
+			/* mark as kernel-created inode */
+			d_inode(dentry)->i_private = &droid_lkm_devtmpfs_thread;
+			droid_lkm_devtmpfs_nodes++;
+		}
 	}
 
 	dput(dentry);
@@ -807,11 +819,53 @@ static int droid_lkm_devtmpfs_mount_check(void)
 	return 0;
 }
 
+/*
+ * every field of a live kernel object this file dereferences. the rest of the
+ * tree reads namespaces through the layout table; this half reads struct
+ * dentry, inode, vfsmount, super_block, device and kset with the build's own
+ * field offsets, because the kernel's inline helpers -- d_inode(),
+ * d_really_is_negative(), inode_lock_nested() -- are written against the build
+ * headers and cannot be redirected. a build offset is only right when the
+ * running kernel places the field where the headers do, and one field off is
+ * d_inode() answering with something that is not an inode, or down_write()
+ * being handed an address that is not an rwsem: that is the fault that took the
+ * device down in droid_lkm_devtmpfs_parent(), and the check it added there read
+ * the same wrong offsets, so it could not catch it. the list is verified before
+ * the mount is built and before the walk runs, and a field the running kernel
+ * does not agree about turns the component off instead of leaving a walk that
+ * dereferences the wrong thing
+ */
+static const enum droid_lkm_field_id droid_lkm_devtmpfs_fields[] = {
+	DROID_LKM_F_VFSMOUNT_MNT_ROOT,
+	DROID_LKM_F_VFSMOUNT_MNT_SB,
+	DROID_LKM_F_SUPER_S_ROOT,
+	DROID_LKM_F_SUPER_S_ACTIVE,
+	DROID_LKM_F_SUPER_S_UMOUNT,
+	DROID_LKM_F_DENTRY_D_INODE,
+	DROID_LKM_F_DENTRY_D_SB,
+	DROID_LKM_F_INODE_I_RWSEM,
+	DROID_LKM_F_INODE_I_PRIVATE,
+	DROID_LKM_F_DEVICE_KOBJ,
+	DROID_LKM_F_DEVICE_CLASS,
+	DROID_LKM_F_DEVICE_DEVT,
+	DROID_LKM_F_KSET_LIST,
+	DROID_LKM_F_KSET_LIST_LOCK,
+};
+
 int droid_lkm_misc_devtmpfs_init(void)
 {
+	const char *bad = NULL;
 	char opts[] = "mode=0755";
 	char detail[64];
 	int err;
+
+	if (!droid_lkm_layout_all_ok(droid_lkm_devtmpfs_fields,
+				     ARRAY_SIZE(droid_lkm_devtmpfs_fields), &bad)) {
+		droid_lkm_misc_err("devtmpfs: the running kernel does not place %s where this build does, refusing to walk live structs\n",
+				   bad ? bad : "a struct field");
+		droid_lkm_misc_report("devtmpfs", "unsupported", "struct layout");
+		return -EOPNOTSUPP;
+	}
 
 	err = droid_lkm_devtmpfs_resolve();
 	if (err)
