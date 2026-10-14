@@ -409,7 +409,7 @@ int droid_lkm_userns_proc_init(void)
 	if (ret)
 		return ret;
 
-	ret = droid_lkm_inline_hook(&droid_lkm_userns_proc_tgid_hook, "proc_tgid_base_lookup",
+	ret = droid_lkm_inline_hook_checked(&droid_lkm_userns_proc_tgid_hook, "proc_tgid_base_lookup",
 				    "droid_lkm_userns_proc_tgid_lookup");
 	if (ret) {
 		droid_lkm_misc_warn("hook proc_tgid_base_lookup failed: %d\n", ret);
@@ -417,7 +417,7 @@ int droid_lkm_userns_proc_init(void)
 	}
 	droid_lkm_userns_proc_tgid_orig = (void *)droid_lkm_userns_proc_tgid_hook.orig;
 
-	ret = droid_lkm_inline_hook(&droid_lkm_userns_proc_tid_hook, "proc_tid_base_lookup",
+	ret = droid_lkm_inline_hook_checked(&droid_lkm_userns_proc_tid_hook, "proc_tid_base_lookup",
 				    "droid_lkm_userns_proc_tid_lookup");
 	if (ret) {
 		droid_lkm_misc_warn("hook proc_tid_base_lookup failed: %d\n", ret);

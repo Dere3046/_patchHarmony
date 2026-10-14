@@ -75,7 +75,7 @@ int droid_lkm_hook_entry_ok(const char *sym)
  * off the core hooks and left every one of theirs installed, which is a
  * misleading answer to give while bisecting a device that a hook is taking down
  */
-int droid_lkm_inline_hook(struct hk_inline *h, const char *sym, const char *wrap)
+int droid_lkm_inline_hook_checked(struct hk_inline *h, const char *sym, const char *wrap)
 {
 	if (!droid_lkm_inline_hooks_on) {
 		pr_warn_once("[droid_lkm] inline hooks are off (inline_hook=0), %s not hooked\n", sym);
@@ -91,7 +91,7 @@ int droid_lkm_inline_hook(struct hk_inline *h, const char *sym, const char *wrap
 int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
 			     const char *wrap)
 {
-	return droid_lkm_inline_hook(h, sym, wrap);
+	return droid_lkm_inline_hook_checked(h, sym, wrap);
 }
 
 void droid_lkm_hook_policy_apply(void)

@@ -910,7 +910,7 @@ int droid_lkm_misc_devtmpfs_init(void)
 		goto out_unregister;
 	}
 
-	err = droid_lkm_inline_hook(&droid_lkm_devtmpfs_add_hook, "device_add",
+	err = droid_lkm_inline_hook_checked(&droid_lkm_devtmpfs_add_hook, "device_add",
 				    "droid_lkm_devtmpfs_device_add");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_add failed: %d\n", err);
@@ -919,7 +919,7 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_add_orig = (void *)droid_lkm_devtmpfs_add_hook.orig;
 
-	err = droid_lkm_inline_hook(&droid_lkm_devtmpfs_del_hook, "device_del",
+	err = droid_lkm_inline_hook_checked(&droid_lkm_devtmpfs_del_hook, "device_del",
 				    "droid_lkm_devtmpfs_device_del");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_del failed: %d\n", err);

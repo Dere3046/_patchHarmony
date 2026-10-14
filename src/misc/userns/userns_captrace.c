@@ -89,7 +89,7 @@ int droid_lkm_userns_captrace_init(void)
 	if (!droid_lkm_userns_init_uns)
 		return -ENOENT;
 
-	ret = droid_lkm_inline_hook(&droid_lkm_userns_cap_hook, "cap_capable",
+	ret = droid_lkm_inline_hook_checked(&droid_lkm_userns_cap_hook, "cap_capable",
 				    "droid_lkm_userns_cap_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("cap trace: hook failed: %d\n", ret);

@@ -95,7 +95,7 @@ int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
  * and the call recurses until the stack is gone. every install site asks first
  */
 int droid_lkm_hook_entry_ok(const char *sym);
-int droid_lkm_inline_hook(struct hk_inline *h, const char *sym, const char *wrap);
+int droid_lkm_inline_hook_checked(struct hk_inline *h, const char *sym, const char *wrap);
 int droid_lkm_hook_install(struct hk_inline *h, const char *sym,
 			   const char *wrap);
 int droid_lkm_hook_install_critical(struct hk_inline *h, const char *sym,
