@@ -60,8 +60,8 @@ jobs:
           grep -rn "device_get_devnode" "$S/drivers/base/base.h" "$S/include/linux/device.h" 2>/dev/null || true
           echo "--- where does proc_alloc_inum live ---"
           grep -rn "proc_alloc_inum" "$S/include" "$S/fs" 2>/dev/null || true
-          echo "--- include/linux/proc_fs.h head ---"
-          sed -n '1,25p' "$S/include/linux/proc_fs.h" 2>/dev/null || true
+          echo "--- create_new_namespaces, headers only ---"
+          grep -rn --include=*.h "create_new_namespaces" "$S/include" "$S/kernel" 2>/dev/null || echo "(no header declares it)"
           echo "--- every other symbol misc_ksym.h leans on, with the file ---"
           for s in xt_register_matches inet_dev_addr_type ipv6_chk_addr __ipv6_addr_type prepare_creds commit_creds key_put; do
             echo "== $s"

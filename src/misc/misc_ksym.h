@@ -9,6 +9,7 @@
 #include <linux/types.h>
 #include <linux/cred.h>
 #include <linux/key.h>
+#include <linux/proc_ns.h>
 #include <linux/nsproxy.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_ipv6.h>
@@ -55,16 +56,9 @@ struct droid_lkm_misc_ksym {
 	typeof(&__ipv6_addr_type)	__ipv6_addr_type;
 	typeof(&__nf_ip6_route)		__nf_ip6_route;
 
-	/*
-	 * the proc inode counter is the one pair with no declaration to copy:
-	 * <linux/proc_fs.h> does not carry the name on any branch this builds for, and
-	 * it lives with the proc filesystem's own sources instead. the shape has not
-	 * moved between 5.10 and 6.12, and both are checked for presence at load time.
-	 */
-	int (*proc_alloc_inum)(unsigned int *pino);
-	void (*proc_free_inum)(unsigned int inum);
-
 	/* fake namespaces */
+	typeof(&proc_alloc_inum)	proc_alloc_inum;
+	typeof(&proc_free_inum)		proc_free_inum;
 	typeof(&prepare_creds)		prepare_creds;
 	typeof(&commit_creds)		commit_creds;
 	typeof(&key_put)		key_put;
