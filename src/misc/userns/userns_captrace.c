@@ -24,6 +24,7 @@
 
 #include "misc.h"
 #include "misc_ksym.h"
+#include "ds.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -88,8 +89,8 @@ int droid_lkm_userns_captrace_init(void)
 	if (!droid_lkm_userns_init_uns)
 		return -ENOENT;
 
-	ret = hk_inline_hook(&droid_lkm_userns_cap_hook, "cap_capable",
-			     "droid_lkm_userns_cap_wrap");
+	ret = droid_lkm_inline_hook(&droid_lkm_userns_cap_hook, "cap_capable",
+				    "droid_lkm_userns_cap_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("cap trace: hook failed: %d\n", ret);
 		return ret;

@@ -35,6 +35,7 @@
 
 #include "misc.h"
 #include "misc_ksym.h"
+#include "ds.h"
 #include "ds_compat.h"
 #include "userns.h"
 #include "hk_inline.h"
@@ -197,7 +198,7 @@ static int droid_lkm_userns_hook_one(struct hk_inline *h, const char *sym,
 {
 	int ret;
 
-	ret = hk_inline_hook(h, sym, wrap);
+	ret = droid_lkm_inline_hook(h, sym, wrap);
 	if (ret) {
 		droid_lkm_misc_warn("hook %s failed: %d\n", sym, ret);
 		return ret;

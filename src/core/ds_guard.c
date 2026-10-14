@@ -104,6 +104,22 @@ int droid_lkm_guard_arm(void)
 		return -EOPNOTSUPP;
 	}
 
+	/*
+	 * panic is hooked through the entry check like every other target. the wall
+	 * is the one thing that must not be installed on a shape the engine cannot
+	 * drive: it would be a trampoline looping back into panic's own entry, and
+	 * the first panic anywhere in the kernel would recurse instead of printing
+	 * a trace. a wall that cannot arm is a device that reboots on panic, which
+	 * is the state it was in before this existed.
+	 *
+	 * the policy is not consulted here: guard=0 is what turns the wall off, and
+	 * inline_hook=0 must not quietly mean the same thing
+	 */
+	if (droid_lkm_hook_entry_ok("panic")) {
+		droid_lkm_warn("guard: the engine cannot drive panic's entry, not arming\n");
+		return -EOPNOTSUPP;
+	}
+
 	ret = hk_inline_hook(&droid_lkm_guard_hook, "panic",
 			     "droid_lkm_guard_swallow");
 	if (ret) {

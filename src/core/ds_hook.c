@@ -30,14 +30,68 @@ module_param_named(write_path, droid_lkm_write_path, uint, 0444);
 MODULE_PARM_DESC(write_path, "0 kernel patch primitive (default), 1 the module's own fixmap writer");
 
 
-int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
-			     const char *wrap)
+/*
+ * the entry before the engine. hk_inline_hook() rewrites the first bytes of a
+ * live function so they jump into the wrapper, and what it can drive is a plain
+ * entry. on a +lto kernel some of these symbols are thunks instead: the engine
+ * then patches the end of a branch chain, its own trampoline loops back into the
+ * entry it just patched, and a call recurses until the kernel stack is gone.
+ *
+ * that is a panic, and with guard=1 armed -- which is the default -- the panic is
+ * answered and returned from rather than taking the device down, so the symptom
+ * on the device is a frozen screen and a watchdog reboot with no trace anywhere
+ * in reach. nothing in the log points at the hook that did it.
+ *
+ * compat/ghost.c has asked this question since it was written, which is why
+ * find_task_by_vpid is the one target that cannot take the device down that way.
+ * every other install site went in blind. one call here turns "recurses until the
+ * stack is gone" into a refusal that names the symbol and the shape the engine
+ * reported, and the feature that wanted the hook degrades instead.
+ *
+ * a probe that cannot answer is not a refusal: the engine may still drive an
+ * entry it cannot describe, which is how ghost.c reads it too
+ */
+int droid_lkm_hook_entry_ok(const char *sym)
+{
+	struct hk_inline_probe probe;
+
+	memset(&probe, 0, sizeof(probe));
+	if (hk_inline_probe(sym, &probe))
+		return 0;
+
+	if (probe.state == HK_INLINE_PLAIN)
+		return 0;
+
+	droid_lkm_warn("inline hook refused: %s entry state %d (%s) target 0x%lx, the engine cannot drive that shape\n",
+		       sym, probe.state, probe.reason ? probe.reason : "?",
+		       probe.target);
+	return -EOPNOTSUPP;
+}
+
+/*
+ * the same question, plus the policy, for the install sites that do not go
+ * through droid_lkm_do_inline_hook(). those are the guard and the whole misc
+ * half, and they used to call hk_inline_hook() directly: inline_hook=0 turned
+ * off the core hooks and left every one of theirs installed, which is a
+ * misleading answer to give while bisecting a device that a hook is taking down
+ */
+int droid_lkm_inline_hook(struct hk_inline *h, const char *sym, const char *wrap)
 {
 	if (!droid_lkm_inline_hooks_on) {
 		pr_warn_once("[droid_lkm] inline hooks are off (inline_hook=0), %s not hooked\n", sym);
 		return -EOPNOTSUPP;
 	}
+
+	if (droid_lkm_hook_entry_ok(sym))
+		return -EOPNOTSUPP;
+
 	return hk_inline_hook(h, sym, wrap);
+}
+
+int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
+			     const char *wrap)
+{
+	return droid_lkm_inline_hook(h, sym, wrap);
 }
 
 void droid_lkm_hook_policy_apply(void)

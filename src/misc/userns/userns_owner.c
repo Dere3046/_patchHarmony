@@ -46,6 +46,7 @@
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
+#include "ds.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -241,16 +242,16 @@ int droid_lkm_userns_owner_init(void)
 		return ret;
 	}
 
-	ret = hk_inline_hook(&droid_lkm_userns_copymntns_hook, "copy_mnt_ns",
-			     "droid_lkm_userns_copymntns_wrap");
+	ret = droid_lkm_inline_hook(&droid_lkm_userns_copymntns_hook, "copy_mnt_ns",
+				    "droid_lkm_userns_copymntns_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("hook copy_mnt_ns failed: %d\n", ret);
 		return ret;
 	}
 	droid_lkm_userns_copymntns_orig = (void *)droid_lkm_userns_copymntns_hook.orig;
 
-	ret = hk_inline_hook(&droid_lkm_userns_fsctx_hook, "fs_context_for_mount",
-			     "droid_lkm_userns_fsctx_wrap");
+	ret = droid_lkm_inline_hook(&droid_lkm_userns_fsctx_hook, "fs_context_for_mount",
+				    "droid_lkm_userns_fsctx_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("hook fs_context_for_mount failed: %d\n", ret);
 		hk_inline_unhook(&droid_lkm_userns_copymntns_hook);

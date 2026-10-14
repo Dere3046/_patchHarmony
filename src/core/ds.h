@@ -88,6 +88,14 @@ extern bool droid_lkm_inline_hooks_on;
 
 int droid_lkm_do_inline_hook(struct hk_inline *h, const char *sym,
 			     const char *wrap);
+
+/*
+ * the engine can drive a plain function entry and nothing else; on a +lto kernel
+ * a thunk entry makes its trampoline loop back into the entry it just patched,
+ * and the call recurses until the stack is gone. every install site asks first
+ */
+int droid_lkm_hook_entry_ok(const char *sym);
+int droid_lkm_inline_hook(struct hk_inline *h, const char *sym, const char *wrap);
 int droid_lkm_hook_install(struct hk_inline *h, const char *sym,
 			   const char *wrap);
 int droid_lkm_hook_install_critical(struct hk_inline *h, const char *sym,

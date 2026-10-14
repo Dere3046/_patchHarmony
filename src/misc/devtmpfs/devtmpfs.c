@@ -66,6 +66,7 @@
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
+#include "ds.h"
 #include "ds_caps.h"
 #include "ds_ti.h"
 #include "hk_inline.h"
@@ -909,8 +910,8 @@ int droid_lkm_misc_devtmpfs_init(void)
 		goto out_unregister;
 	}
 
-	err = hk_inline_hook(&droid_lkm_devtmpfs_add_hook, "device_add",
-			     "droid_lkm_devtmpfs_device_add");
+	err = droid_lkm_inline_hook(&droid_lkm_devtmpfs_add_hook, "device_add",
+				    "droid_lkm_devtmpfs_device_add");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_add failed: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "device_add hook failed");
@@ -918,8 +919,8 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_add_orig = (void *)droid_lkm_devtmpfs_add_hook.orig;
 
-	err = hk_inline_hook(&droid_lkm_devtmpfs_del_hook, "device_del",
-			     "droid_lkm_devtmpfs_device_del");
+	err = droid_lkm_inline_hook(&droid_lkm_devtmpfs_del_hook, "device_del",
+				    "droid_lkm_devtmpfs_device_del");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_del failed: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "device_del hook failed");

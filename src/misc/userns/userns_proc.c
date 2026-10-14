@@ -44,6 +44,7 @@
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
+#include "ds.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -408,16 +409,16 @@ int droid_lkm_userns_proc_init(void)
 	if (ret)
 		return ret;
 
-	ret = hk_inline_hook(&droid_lkm_userns_proc_tgid_hook, "proc_tgid_base_lookup",
-			     "droid_lkm_userns_proc_tgid_lookup");
+	ret = droid_lkm_inline_hook(&droid_lkm_userns_proc_tgid_hook, "proc_tgid_base_lookup",
+				    "droid_lkm_userns_proc_tgid_lookup");
 	if (ret) {
 		droid_lkm_misc_warn("hook proc_tgid_base_lookup failed: %d\n", ret);
 		return ret;
 	}
 	droid_lkm_userns_proc_tgid_orig = (void *)droid_lkm_userns_proc_tgid_hook.orig;
 
-	ret = hk_inline_hook(&droid_lkm_userns_proc_tid_hook, "proc_tid_base_lookup",
-			     "droid_lkm_userns_proc_tid_lookup");
+	ret = droid_lkm_inline_hook(&droid_lkm_userns_proc_tid_hook, "proc_tid_base_lookup",
+				    "droid_lkm_userns_proc_tid_lookup");
 	if (ret) {
 		droid_lkm_misc_warn("hook proc_tid_base_lookup failed: %d\n", ret);
 		hk_inline_unhook(&droid_lkm_userns_proc_tgid_hook);
