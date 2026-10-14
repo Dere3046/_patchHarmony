@@ -34,14 +34,17 @@ jobs:
           probe() {
             s="$1"
             echo "===== $s ====="
-            grep -rn --include=*.h -E "(^|[^a-zA-Z_])$s[ 	]*\(" $R 2>/dev/null \
-              | grep -v -E '^[^:]+:[0-9]+:[ 	]*([*/]|$)' \
-              | head -8 || true
+            grep -rn --include=*.h -A6 -E "(^|[^a-zA-Z_])$s[ 	]*\(" $R 2>/dev/null \
+              | grep -v -E '^[^:]+[:-][0-9]+[-:][ 	]*(\*|/\*)' \
+              | head -14 || true
           }
-          for s in notify_change create_new_namespaces key_put ipv6_chk_addr; do
+          for s in device_get_devnode notify_change vfs_mknod vfs_mkdir vfs_unlink vfs_rmdir ipv6_chk_addr; do
             probe "$s"
           done
-          for d in block_class; do
-            echo "===== data: $d ====="
-            grep -rn --include=*.h -E "(extern )?(const )?struct [a-z_]+ +\*?$d(;|\[)" $R 2>/dev/null | head -4 || true
-          done
+          echo "===== create_new_namespaces (any file) ====="
+          grep -rn --include=*.h --include=*.c -E "(^|[^a-zA-Z_])create_new_namespaces[ 	]*\(" \
+            "$S/include" "$S/kernel" 2>/dev/null | head -8 || true
+          echo "===== data: block_class ====="
+          grep -rn --include=*.h -E "(extern )?(const )?struct class block_class(;|\[)" $R 2>/dev/null | head -4 || true
+          echo "===== data: nop_mnt_idmap ====="
+          grep -rn --include=*.h -E "extern struct mnt_idmap nop_mnt_idmap" $R 2>/dev/null | head -2 || true
