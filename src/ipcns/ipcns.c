@@ -423,7 +423,12 @@ int droid_lkm_ipcns_init(void)
 		return -ENOMEM;
 	}
 
-	shm_init_ns(&init_ipc_ns);
+	/*
+	 * droid_lkm_ipc_util_init() above already ran msg_init()/sem_init()/
+	 * shm_init() over this same object, so all three of its id sets are
+	 * initialised. calling shm_init_ns() again would rhashtable_init() and
+	 * idr_init() the shm set a second time and leak the first pair of tables
+	 */
 
 	droid_lkm_ipcns_host = &init_ipc_ns;
 	
