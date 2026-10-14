@@ -276,6 +276,8 @@ static int droid_lkm_slot_patch(unsigned long *tab, int nr, unsigned long fn,
 				unsigned long *orig_out)
 {
 	int i;
+	unsigned long old;
+	int ret;
 
 	if (!tab || nr < 0)
 		return -EINVAL;
@@ -286,14 +288,28 @@ static int droid_lkm_slot_patch(unsigned long *tab, int nr, unsigned long fn,
 		    droid_lkm_slot_saves[i].nr == nr)
 			return -EEXIST;
 
+	old = tab[nr];
+
+	/*
+	 * the save entry is recorded only once the store went through. writing it
+	 * first would leave a row that was never patched holding an entry of a
+	 * table capped at DROID_LKM_SLOT_SAVE_MAX, so a kernel that refuses the
+	 * text write would fill the table with failures alone and every later
+	 * patch would come back -ENOSPC
+	 */
+	ret = droid_lkm_patch_write(&tab[nr], fn);
+	if (ret)
+		return ret;
+
 	droid_lkm_slot_saves[droid_lkm_slot_save_cnt].tab = tab;
 	droid_lkm_slot_saves[droid_lkm_slot_save_cnt].nr = nr;
-	droid_lkm_slot_saves[droid_lkm_slot_save_cnt].orig = tab[nr];
-	if (orig_out)
-		*orig_out = tab[nr];
+	droid_lkm_slot_saves[droid_lkm_slot_save_cnt].orig = old;
 	droid_lkm_slot_save_cnt++;
 
-	return droid_lkm_patch_write(&tab[nr], fn);
+	if (orig_out)
+		*orig_out = old;
+
+	return 0;
 }
 
 static void droid_lkm_slot_unpatch(unsigned long *tab, int nr)
@@ -682,6 +698,16 @@ static long droid_lkm_unshare_legacy(const struct pt_regs *regs)
 	long ret;
 
 	tmp.regs[0] = flags & ~(CLONE_NEWPID | CLONE_NEWIPC);
+	/*
+	 * the fake namespaces are attached to current->nsproxy a few lines below,
+	 * and a task that shares its nsproxy -- with its threads, or with whoever
+	 * it forked from -- would leak them to that share. asking the kernel for
+	 * one more namespace is what forces a private nsproxy, and uts is the one
+	 * with no owner to fix up afterwards. the caller therefore gets a private
+	 * hostname along with the namespace it asked for; that is the price of
+	 * this path, which only runs when the create_new_namespaces hook is
+	 * unavailable
+	 */
 	if (!(tmp.regs[0] & DROID_LKM_NS_FLAGS))
 		tmp.regs[0] |= CLONE_NEWUTS;
 
