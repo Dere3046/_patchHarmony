@@ -12,9 +12,28 @@
 #include <linux/ns_common.h>
 #include <linux/user_namespace.h>
 #include <linux/proc_ns.h>
+#include <linux/refcount.h>
+#include <linux/version.h>
 
 struct task_struct;
 struct cred;
+
+/*
+ * ns_common's own reference count. 6.18 renamed the field to __ns_ref; 5.15
+ * introduced it as count. a bare ns_common has no counter before 5.15 -- the
+ * concrete type carries it there -- but this half is not built below 5.12 (the
+ * Makefile gates it on mnt_idmapping.h) and nothing in it builds a plain
+ * ns_common without going through one of the two shapes below, so only those
+ * two are spelled. this mirrors droid_lkm_pidns_refcount() in ds_pidns.h
+ */
+static inline refcount_t *droid_lkm_userns_ns_ref(struct ns_common *ns)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	return &ns->__ns_ref;
+#else
+	return &ns->count;
+#endif
+}
 
 /*
  * one fake user namespace. struct user_namespace comes first so the object can be handed to

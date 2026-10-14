@@ -86,7 +86,7 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 						 CAP_SETFCAP);
 	u->uns.ns.inum = inum;
 	u->uns.ns.ops = droid_lkm_userns_ops();
-	refcount_set(&u->uns.ns.count, 1);
+	refcount_set(droid_lkm_userns_ns_ref(&u->uns.ns), 1);
 	u->uns.ucounts = NULL;
 	/*
 	 * inc_ucount() walks ns->ucount_max[], which zero would turn into ENOSPC for every

@@ -97,8 +97,16 @@ static int droid_lkm_userns_mnt_ops_resolve(void)
 	if (!ops.name || safe_read(text, ops.name, 4) || memcmp(text, "mnt", 4))
 		return -EINVAL;
 
+	/*
+	 * 6.18 moved the type off proc_ns_operations and onto ns_common::ns_type,
+	 * where this table is not the thing that carries it. the name check above
+	 * is what pins the table on those kernels; on every version that still
+	 * has the member, keep the second answer
+	 */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	if (ops.type != CLONE_NEWNS)
 		return -EINVAL;
+#endif
 
 	if (!ops.owner || !droid_lkm_userns_is_text((unsigned long)ops.owner))
 		return -EINVAL;
