@@ -376,6 +376,17 @@ __nocfi noinline bool droid_lkm_ipc_sysctls_setup(struct ipc_namespace *ns)
 	if (!droid_lkm_ipc_sysctls_ready)
 		return false;
 
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_KERNEL) {
+		/*
+		 * the kernel registers shmmax & co. on its own ipc_set at boot, and the
+		 * namespaces it hands out come from its own copy_ipcs(), which sets
+		 * their tables up too. initialising that set a second time drops the
+		 * kernel's own ctl_dir, and registering the same procnames next to its
+		 * entries fails on a duplicate entry, so there is nothing to add here
+		 */
+		return true;
+	}
+
 	if (!droid_lkm_ipc_sysctl_fields_ok()) {
 		droid_lkm_warn("ipc sysctls refused: the running kernel's layout does not place ipc_namespace.ipc_set\n");
 		return false;
@@ -417,6 +428,23 @@ __nocfi noinline void droid_lkm_ipc_sysctls_retire(struct ipc_namespace *ns)
 {
 	const struct ctl_table *tbl;
 
+	/*
+	 * the mirror of the same test in droid_lkm_ipc_sysctls_setup(): with the
+	 * kernel owning SysV, the header this namespace carries is the kernel's
+	 * own, and unregister_sysctl_table() plus a kfree of its ctl_table_arg
+	 * would take the host's /proc/sys/kernel tables down with it. the kernel
+	 * registered them, the kernel retires them
+	 */
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_KERNEL)
+		return;
+
+	/*
+	 * DROID_LKM_NS_IPC_SYSCTLS is droid_lkm_layout_ptr(), which answers NULL
+	 * for a field the scan did not confirm, so the field has to be tested
+	 * before the pointer built from it is dereferenced
+	 */
+	if (!droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_IPC_SYSCTLS))
+		return;
 	if (!*DROID_LKM_NS_IPC_SYSCTLS(ns))
 		return;
 
@@ -433,6 +461,11 @@ __nocfi noinline void droid_lkm_ipc_sysctls_retire(struct ipc_namespace *ns)
  */
 static int droid_lkm_ipc_sysctls_host_setup(void)
 {
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_KERNEL) {
+		droid_lkm_info("ipc sysctls: the running kernel owns SysV, its own tables stay\n");
+		return 0;
+	}
+
 	droid_lkm_sysctl_mni = ipc_mni;
 
 	if (!droid_lkm_ipc_sysctls_setup(droid_lkm_ipcns_host_ns()))
@@ -451,21 +484,81 @@ static void droid_lkm_ipc_sysctls_host_teardown(void)
 
 /* the one global table, registered on the default set */
 static struct ctl_table_header *droid_lkm_ipc_global_header;
+static struct ctl_table *droid_lkm_ipc_global_tbl;
+
+/*
+ * the fixed point of the ipc handlers. every one of them starts from
+ * table->data and relocates it to the namespace of the caller, see
+ * droid_lkm_ipc_data(): it computes data - &init_ipc_ns + ns. an entry whose
+ * data is NULL therefore relocates from NULL, which is the address of nothing
+ * minus the address of init_ipc_ns -- a read of /proc/sys/kernel/shmmax would
+ * touch whatever that difference makes. the static table carries NULL because
+ * the >= 6.1 path fills a per namespace copy instead, so the copy built here
+ * gets the field of init_ipc_ns the running kernel actually places at that
+ * offset, through DROID_LKM_INIT_NS_FIELD. the layout gate keeps the entries
+ * out of /proc entirely when the scan did not confirm those offsets
+ */
+static bool droid_lkm_ipc_sysctl_fields_ok(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(droid_lkm_ipc_sysctl_fields); i++) {
+		enum droid_lkm_field_id id = droid_lkm_ipc_sysctl_fields[i];
+
+		if (id == DROID_LKM_FIELD_COUNT)
+			continue;
+		if (!droid_lkm_layout_ok(id))
+			return false;
+	}
+
+	return true;
+}
 
 static __nocfi noinline int droid_lkm_ipc_sysctls_host_setup(void)
 {
+	struct ctl_table *tbl;
+	int i;
+
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_KERNEL) {
+		droid_lkm_info("ipc sysctls: the running kernel owns SysV, its own tables stay\n");
+		return 0;
+	}
+
 	if (!droid_lkm_ks.register_sysctl) {
 		droid_lkm_warn("register_sysctl unavailable, the SysV limits stay unexposed\n");
 		return 0;
 	}
 
+	if (!droid_lkm_ipc_sysctl_fields_ok()) {
+		droid_lkm_warn("ipc sysctls refused: the running kernel's layout does not place ipc_namespace's limits\n");
+		return 0;
+	}
+
 	droid_lkm_sysctl_mni = IPCMNI;
-	droid_lkm_ipc_global_header =
-		droid_lkm_ks.register_sysctl("kernel", droid_lkm_ipc_sysctls);
+
+	tbl = kmemdup(droid_lkm_ipc_sysctls,
+		      DROID_LKM_IPC_SYSCTL_COUNT * sizeof(droid_lkm_ipc_sysctls[0]),
+		      GFP_KERNEL);
+	if (!tbl) {
+		droid_lkm_warn("global SysV sysctl table allocation failed, limits stay unexposed\n");
+		return 0;
+	}
+
+	for (i = 0; i < DROID_LKM_IPC_SYSCTL_COUNT; i++) {
+		enum droid_lkm_field_id id = droid_lkm_ipc_sysctl_fields[i];
+
+		if (id == DROID_LKM_FIELD_COUNT)
+			continue;
+		tbl[i].data = DROID_LKM_INIT_NS_FIELD(id);
+	}
+
+	droid_lkm_ipc_global_header = droid_lkm_ks.register_sysctl("kernel", tbl);
 	if (!droid_lkm_ipc_global_header) {
+		kfree(tbl);
 		droid_lkm_warn("global SysV sysctl registration failed, limits stay unexposed\n");
 		return 0;
 	}
+	droid_lkm_ipc_global_tbl = tbl;
 
 	droid_lkm_info("ipc sysctls registered on the default set (shmmax/shmall/shmmni/shm_rmid_forced/msgmax/msgmnb/msgmni/sem/auto_msgmni)\n");
 	return 0;
@@ -477,6 +570,9 @@ static __nocfi noinline void droid_lkm_ipc_sysctls_host_teardown(void)
 		droid_lkm_ks.unregister_sysctl_table(droid_lkm_ipc_global_header);
 		droid_lkm_ipc_global_header = NULL;
 	}
+	/* the registered table is the module's own copy, the kernel never owned it */
+	kfree(droid_lkm_ipc_global_tbl);
+	droid_lkm_ipc_global_tbl = NULL;
 }
 
 /*

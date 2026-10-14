@@ -31,6 +31,15 @@ struct droid_lkm_field {
 };
 
 enum {
+	/*
+	 * zero, because zero is what a field the scan never reached still holds.
+	 * droid_lkm_layout_init() returns early when type info or BTF is missing,
+	 * so the state left behind on that path has to mean "not confirmed" and
+	 * never "ok": droid_lkm_layout_ok() answering true there would hand every
+	 * caller a live offset of zero into a struct nobody has checked, and the
+	 * guards that were written to refuse exactly that would all pass
+	 */
+	DROID_LKM_FIELD_UNSET = 0,
 	DROID_LKM_FIELD_OK,
 	DROID_LKM_FIELD_NO_TYPE,
 	DROID_LKM_FIELD_NO_MEMBER,

@@ -257,6 +257,21 @@ void droid_lkm_retire_mq_sysctls(struct ipc_namespace *ns)
 {
 	const struct ctl_table *tbl;
 
+	/*
+	 * the module registers these tables only when it is the one serving
+	 * mqueue. with the kernel owning it the header here is the kernel's own,
+	 * and taking it down would withdraw the host's /proc/sys/fs/mqueue
+	 */
+	if (droid_lkm_caps.posix_mqueue.owner == DROID_LKM_KERNEL)
+		return;
+
+	/*
+	 * DROID_LKM_NS_MQ_SYSCTLS is droid_lkm_layout_ptr(), which answers NULL
+	 * for a field the scan did not confirm, so the field has to be tested
+	 * before the pointer built from it is dereferenced
+	 */
+	if (!droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_MQ_SYSCTLS))
+		return;
 	if (!*DROID_LKM_NS_MQ_SYSCTLS(ns))
 		return;
 
