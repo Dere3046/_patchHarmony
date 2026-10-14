@@ -49,30 +49,39 @@ jobs:
       # answer, not a reason to kill the job
       - name: DDK facts
         run: |
+          S=$(readlink -f "$KDIR/source" 2>/dev/null); S=${S:-$KDIR/source}
           echo "KMI=${{ matrix.kmi }}"
           echo "KDIR=$KDIR"
+          echo "SRC=$S"
           echo "--- kdir ---"; ls -l "$KDIR" 2>/dev/null || true
-          echo "--- source ---"; readlink -f "$KDIR/source" || true; ls -l "$KDIR/source" 2>/dev/null | head -20 || true
-          echo "--- device_get_devnode in drivers/base/base.h ---"
-          grep -rn -A2 "device_get_devnode" "$KDIR/source/drivers/base/base.h" 2>/dev/null || true
-          echo "--- device_get_devnode in include/linux/device.h ---"
-          grep -rn -A2 "device_get_devnode" "$KDIR/source/include/linux/device.h" 2>/dev/null || true
-          echo "--- the declarations misc_ksym.h leans on ---"
-          for s in xt_register_matches inet_dev_addr_type ipv6_chk_addr __ipv6_addr_type proc_alloc_inum prepare_creds commit_creds key_put; do
-            printf '%-24s ' "$s"
-            grep -rhoE "[a-zA-Z_ ].*[^a-zA-Z_]$s\([^;]*;" \
-              "$KDIR/source/include" "$KDIR/source/net" 2>/dev/null | head -1 || true
-            echo
+          echo "--- kdir/include ---"; ls -l "$KDIR/include" 2>/dev/null || true
+          echo "--- source ---"; ls -l "$KDIR/source" 2>/dev/null | head -15 || true
+          echo "--- device_get_devnode, whole tree ---"
+          grep -rn "device_get_devnode" "$S/drivers/base/base.h" "$S/include/linux/device.h" 2>/dev/null || true
+          echo "--- where does proc_alloc_inum live ---"
+          grep -rn "proc_alloc_inum" "$S/include" "$S/fs" 2>/dev/null || true
+          echo "--- include/linux/proc_fs.h head ---"
+          sed -n '1,25p' "$S/include/linux/proc_fs.h" 2>/dev/null || true
+          echo "--- every other symbol misc_ksym.h leans on, with the file ---"
+          for s in xt_register_matches inet_dev_addr_type ipv6_chk_addr __ipv6_addr_type prepare_creds commit_creds key_put; do
+            echo "== $s"
+            grep -rn -E "[^a-zA-Z_]$s\(" "$S/include" "$S/net" 2>/dev/null | head -2 || true
           done
           echo "--- Module.symvers ---"
           ls -l "$KDIR/Module.symvers" 2>/dev/null && wc -l < "$KDIR/Module.symvers" || echo "absent"
-          echo "--- vmlinux (informational, nothing depends on it) ---"
+          echo "--- vmlinux (informational) ---"
           ls -l "$KDIR/vmlinux" 2>/dev/null || true
 
+      # -k so one run names every symbol that is not in scope, not just the first
+      # object that happens to be compiled
       - name: Build ${{ matrix.kmi }}
         run: |
-          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          make VER=${{ matrix.kmi }} -k > build.log 2>&1 || true
           tail -5 build.log
+          if grep -nE "error:" build.log; then
+            echo "build failed"
+            exit 1
+          fi
 
       # case insensitive, and it covers modpost's ERROR:/WARNING: too. the lowercase
       # form this used to match let every "undefined!" and every version mismatch
