@@ -1,0 +1,47 @@
+name: Probe
+
+# diagnostic only: resolves the exact per-KMI prototype of the kernel symbols
+# this module reaches through function pointers. deleted again once the
+# prototypes in devtmpfs.c and misc_ksym.h are written out against it.
+on:
+  push:
+    paths:
+      - '.github/workflows/probe.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260313
+      options: --privileged
+    steps:
+      - name: Probe
+        run: |
+          S="$KDIR/source"
+          R="$S/include $S/kernel $S/net $S/fs $S/drivers $S/security $S/ipc"
+          echo "KMI=${{ matrix.kmi }}"
+          probe() {
+            s="$1"
+            echo "===== $s ====="
+            grep -rn --include=*.h -E "(^|[^a-zA-Z_])$s[ 	]*\(" $R 2>/dev/null \
+              | grep -v -E '^[^:]+:[0-9]+:[ 	]*([*/]|$)' \
+              | head -8 || true
+          }
+          for s in notify_change create_new_namespaces key_put ipv6_chk_addr; do
+            probe "$s"
+          done
+          for d in block_class; do
+            echo "===== data: $d ====="
+            grep -rn --include=*.h -E "(extern )?(const )?struct [a-z_]+ +\*?$d(;|\[)" $R 2>/dev/null | head -4 || true
+          done
