@@ -130,6 +130,24 @@ static struct vfsmount *droid_lkm_devtmpfs_mnt;
 static bool droid_lkm_devtmpfs_registered;
 static unsigned long droid_lkm_devtmpfs_nodes;
 
+/* how many node failures have been named, so a walk of hundreds stays readable */
+static unsigned int droid_lkm_devtmpfs_fail_log;
+
+/*
+ * what a lock's state looks like from the outside, so the mount path can be read
+ * instead of argued about. struct rw_semaphore's count is its first member on
+ * every branch this module builds for, and s_active says which reference is left.
+ * the question this answers is whether the write lock the mount takes is given
+ * back, and by whom -- a count that stays off the unlocked value after up_write()
+ * names the call that is holding it
+ */
+static void droid_lkm_devtmpfs_lock_state(const char *where, struct super_block *s)
+{
+	droid_lkm_misc_dbg("devtmpfs: %s: s_umount.count=0x%lx s_active=%d\n", where,
+			   (unsigned long)atomic_long_read(&s->s_umount.count),
+			   atomic_read(&s->s_active));
+}
+
 static struct hk_inline droid_lkm_devtmpfs_add_hook;
 static struct hk_inline droid_lkm_devtmpfs_del_hook;
 static int (*droid_lkm_devtmpfs_add_orig)(struct device *dev);
@@ -177,6 +195,10 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	struct dentry *root;
 	int err;
 
+	droid_lkm_misc_dbg("devtmpfs: mount enter: %s[%d] flags=0x%x data=%s\n",
+			   current->comm, current->pid, flags,
+			   data ? (const char *)data : "-");
+
 	mutex_lock(&droid_lkm_devtmpfs_lock);
 
 	if (!droid_lkm_devtmpfs_mnt) {
@@ -198,11 +220,15 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	 * kernel does not carry the killable variant
 	 */
 	if (down_write_killable(&s->s_umount)) {
+		droid_lkm_misc_warn("devtmpfs: mount interrupted waiting for s_umount, a previous holder never released it\n");
 		atomic_dec(&s->s_active);
 		mutex_unlock(&droid_lkm_devtmpfs_lock);
 		return ERR_PTR(-EINTR);
 	}
+	droid_lkm_devtmpfs_lock_state("locked", s);
+
 	err = droid_lkm_devtmpfs_ks.reconfigure_single(s, flags, data);
+	droid_lkm_misc_dbg("devtmpfs: reconfigure_single -> %d\n", err);
 	if (err < 0) {
 		/*
 		 * the reference taken above is dropped here and the write lock is
@@ -229,6 +255,7 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 		 */
 		atomic_dec(&s->s_active);
 		up_write(&s->s_umount);
+		droid_lkm_devtmpfs_lock_state("released(err)", s);
 		mutex_unlock(&droid_lkm_devtmpfs_lock);
 		return ERR_PTR(err);
 	}
@@ -241,6 +268,7 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	 * deactivate_locked_super() is the one that never gave it back
 	 */
 	up_write(&s->s_umount);
+	droid_lkm_devtmpfs_lock_state("released(ok)", s);
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
 
 	return root;
@@ -334,6 +362,7 @@ static int droid_lkm_devtmpfs_create_node(struct device *dev)
 	umode_t mode = 0;
 	kuid_t uid = GLOBAL_ROOT_UID;
 	kgid_t gid = GLOBAL_ROOT_GID;
+	int ret;
 
 	if (!droid_lkm_devtmpfs_thread)
 		return 0;
@@ -349,7 +378,17 @@ static int droid_lkm_devtmpfs_create_node(struct device *dev)
 	else
 		mode |= S_IFCHR;
 
-	return droid_lkm_devtmpfs_submit(name, mode, uid, gid, dev, tmp);
+	ret = droid_lkm_devtmpfs_submit(name, mode, uid, gid, dev, tmp);
+	/*
+	 * the walk refuses silently otherwise, which is how a tree that ends up
+	 * with no nodes at all says nothing about why
+	 */
+	if (ret && droid_lkm_devtmpfs_fail_log < 8) {
+		droid_lkm_devtmpfs_fail_log++;
+		droid_lkm_misc_warn("devtmpfs: %s: create failed: %d\n", name, ret);
+	}
+
+	return ret;
 }
 
 static int droid_lkm_devtmpfs_delete_node(struct device *dev)
@@ -689,7 +728,7 @@ static int droid_lkm_devtmpfs_thread_fn(void *p)
 static void droid_lkm_devtmpfs_populate(void)
 {
 	struct kobject *kobj;
-	unsigned int count = 0, i = 0;
+	unsigned int count = 0, tried = 0, i = 0;
 	struct device **devs;
 
 	if (!droid_lkm_devtmpfs_ks.devices_kset)
@@ -718,10 +757,15 @@ static void droid_lkm_devtmpfs_populate(void)
 	spin_unlock(&droid_lkm_devtmpfs_ks.devices_kset->list_lock);
 
 	while (i--) {
-		if (MAJOR(devs[i]->devt))
+		if (MAJOR(devs[i]->devt)) {
+			tried++;
 			droid_lkm_devtmpfs_create_node(devs[i]);
+		}
 		put_device(devs[i]);
 	}
+
+	droid_lkm_misc_info("devtmpfs: walk: %u devices, %u with a devt, %lu nodes\n",
+			    count, tried, droid_lkm_devtmpfs_nodes);
 
 	kfree(devs);
 }
