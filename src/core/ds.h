@@ -5,6 +5,17 @@
  * Copyright (C) 2026 dere3046
  */
 
+/*
+ * the guard covers the whole file. it used to close above droid_lkm_patch_write,
+ * which left everything from there down redefinable, and it went unnoticed while
+ * only one translation unit included this twice. misc.h includes it and the misc
+ * files include it directly, so that stopped being true:
+ *
+ *     src/core/ds.h:76:19: error: redefinition of 'droid_lkm_patch_write'
+ *
+ * on every matrix leg. nothing here is safe to define twice, so the guard ends
+ * at the end.
+ */
 #ifndef DROID_LKM_H
 #define DROID_LKM_H
 
@@ -63,8 +74,6 @@ void droid_lkm_task_ipc_deferred_run(void);
 void droid_lkm_keepalive_pin(void);
 void droid_lkm_keepalive_sync(void);
 void droid_lkm_keepalive_release(void);
-
-#endif
 
 /*
  * every text write of this module goes through the kernel's own patch
@@ -154,3 +163,5 @@ struct dentry;
 struct dentry_operations;
 struct dentry *lookup_one_len(const char *name, struct dentry *base, int len);
 void d_set_d_op(struct dentry *dentry, const struct dentry_operations *op);
+
+#endif /* DROID_LKM_H */
