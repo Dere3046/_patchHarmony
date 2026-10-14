@@ -8,6 +8,7 @@
 #include <linux/cred.h>
 #include <linux/mutex.h>
 #include <linux/refcount.h>
+#include <linux/version.h>
 #include <linux/user_namespace.h>
 
 #include "misc.h"
@@ -94,8 +95,12 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 	 */
 	for (i = 0; i < UCOUNT_COUNTS; i++)
 		u->uns.ucount_max[i] = INT_MAX;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
+	/* the per namespace rlimit table arrived in 6.1, with the counter that
+	 * indexes it; before that a user namespace has no rlimit_max to fill */
 	for (i = 0; i < UCOUNT_RLIMIT_COUNTS; i++)
 		u->uns.rlimit_max[i] = LONG_MAX;
+#endif
 	INIT_LIST_HEAD(&u->link);
 
 	/* phase one installs the identity map, the only map a container on this kernel could write */

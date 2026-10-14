@@ -52,7 +52,7 @@ jobs:
 
       - name: Build ${{ matrix.kmi }}
         run: |
-          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          make VER=${{ matrix.kmi }} -k > build.log 2>&1 || { grep -nE "error:" build.log | head -80; exit 1; }
           tail -5 build.log
 
       - name: Debug artifacts
