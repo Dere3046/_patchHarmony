@@ -13,4 +13,6 @@ void droid_lkm_slot_exit(void);
 bool droid_lkm_slot_skip_sysvipc(void);
 bool droid_lkm_slot_no_fake_ns(void);
 
+bool droid_lkm_indirect_callable(unsigned long addr);
+
 #endif

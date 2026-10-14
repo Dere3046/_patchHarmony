@@ -231,13 +231,29 @@ typeof(&get_compat_sigevent) droid_lkm_p_get_compat_sigevent;
  * that kernel did: the queue keeps working, it is just not counted against the
  * user. on the branches that have it, a symbol trimmed from the image by
  * TRIM_UNUSED_KSYMS degrades the same way instead of failing the load.
+ *
+ * get_ucounts is the one helper no longer trimmed but moved: 6.18 turned it
+ * into an inline over rcuref_get in user_namespace.h, so the running kernel
+ * exports nothing by that name and the thunk resolves to NULL on every 6.18
+ * image. the module compiles against that same header, so it calls the same
+ * body and keeps the accounting on instead of dropping the charge.
  */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+#define DROID_LKM_MQ_UCOUNTS_INLINE 1
+#else
+#define DROID_LKM_MQ_UCOUNTS_INLINE 0
+#endif
+
 __nocfi noinline struct ucounts *droid_lkm_mq_ucounts_get(void)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-	if (!droid_lkm_ks.ucounts_get)
-		return NULL;
-	return droid_lkm_ks.ucounts_get(current_ucounts());
+	if (droid_lkm_ks.ucounts_get)
+		return droid_lkm_ks.ucounts_get(current_ucounts());
+#if DROID_LKM_MQ_UCOUNTS_INLINE
+	return get_ucounts(current_ucounts());
+#else
+	return NULL;
+#endif
 #else
 	return NULL;
 #endif
@@ -384,7 +400,8 @@ __nocfi noinline int droid_lkm_mqueue_shim_init(void)
 		return -ENODATA;
 	}
 
-	if (!droid_lkm_ks.ucounts_get || !droid_lkm_ks.ucounts_put ||
+	if ((!droid_lkm_ks.ucounts_get && !DROID_LKM_MQ_UCOUNTS_INLINE) ||
+	    !droid_lkm_ks.ucounts_put ||
 	    !droid_lkm_ks.ucounts_inc_rlimit || !droid_lkm_ks.ucounts_dec_rlimit)
 		droid_lkm_warn("mqueue: RLIMIT_MSGQUEUE accounting unavailable, queues not charged\n");
 

@@ -275,6 +275,7 @@ static int droid_lkm_slot_save_cnt;
 static int droid_lkm_slot_patch(unsigned long *tab, int nr, unsigned long fn,
 				unsigned long *orig_out)
 {
+	int ret;
 	int i;
 
 	if (!tab || nr < 0)
@@ -293,7 +294,21 @@ static int droid_lkm_slot_patch(unsigned long *tab, int nr, unsigned long fn,
 		*orig_out = tab[nr];
 	droid_lkm_slot_save_cnt++;
 
-	return droid_lkm_patch_write(&tab[nr], fn);
+	ret = droid_lkm_patch_write(&tab[nr], fn);
+
+	/*
+	 * the same read back the ns dir hook does, for the same reason: a writer that
+	 * reports success is not a mapping that took the store, and this table is the
+	 * one every other feature here depends on. a slot that did not take says so
+	 * instead of leaving a feature that quietly never runs
+	 */
+	if (!ret && READ_ONCE(tab[nr]) != fn) {
+		droid_lkm_err("slot %d did not take: want=0x%lx got=0x%lx\n", nr, fn,
+			       READ_ONCE(tab[nr]));
+		return -EIO;
+	}
+
+	return ret;
 }
 
 static void droid_lkm_slot_unpatch(unsigned long *tab, int nr)
@@ -776,12 +791,44 @@ static long droid_lkm_sys_reboot(const struct pt_regs *regs)
 	return 0;
 }
 
+/*
+ * an indirect call into a kernel function is only legal under bti when the
+ * entry carries a landing pad. a static function whose address the kernel
+ * never takes does not have one, and check_unshare_flags is exactly that: on a
+ * bti kernel the call raises a bti exception, which is fatal rather than
+ * something a caller can recover from. read the entry first and only keep the
+ * pointer when the pad is there. the precheck already treats a missing pointer
+ * as "skip this one test", which is what an absent symbol looks like too, so
+ * the loss is the same flag validation either way
+ */
+bool droid_lkm_indirect_callable(unsigned long addr)
+{
+	u32 insn;
+
+	if (!addr)
+		return false;
+	if (copy_from_kernel_nofault(&insn, (void *)addr, sizeof(insn)))
+		return false;
+
+	/* the two landing pads a blr accepts: bti c and bti jc */
+	return insn == 0xd50323bf || insn == 0xd50323ff;
+}
+
 static int droid_lkm_nsproxy_hook_install(void)
 {
 	int ret;
 
-	droid_lkm_check_unshare_flags_fn =
-		(int (*)(unsigned long))droid_lkm_sym("check_unshare_flags");
+	{
+		unsigned long cu = droid_lkm_sym("check_unshare_flags");
+
+#if IS_ENABLED(CONFIG_ARM64_BTI_KERNEL)
+		if (cu && !droid_lkm_indirect_callable(cu)) {
+			droid_lkm_warn("check_unshare_flags carries no bti landing pad, the flag check is skipped\n");
+			cu = 0;
+		}
+#endif
+		droid_lkm_check_unshare_flags_fn = (int (*)(unsigned long))cu;
+	}
 
 	ret = droid_lkm_hook_install_critical(&droid_lkm_cnn_hook,
 					      "create_new_namespaces",
