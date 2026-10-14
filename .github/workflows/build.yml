@@ -41,6 +41,19 @@ jobs:
           git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
           scripts/fetch-deps.sh
 
+      - name: Prototype probe
+        run: |
+          H="$KDIR/source/include"
+          echo "KMI=${{ matrix.kmi }}"
+          for s in device_get_devnode vfs_kern_mount kern_unmount vfs_mknod vfs_mkdir notify_change vfs_unlink vfs_rmdir vfs_getattr register_filesystem unregister_filesystem reconfigure_single deactivate_locked_super shmem_init_fs_context kill_litter_super lookup_one_len dget_parent create_new_namespaces prepare_creds commit_creds key_put; do
+            echo "===== $s ====="
+            grep -rn --include=*.h -A4 "[^a-zA-Z_]$s(" "$H" 2>/dev/null | head -10 || true
+          done
+          for d in block_class devices_kset; do
+            echo "===== data: $d ====="
+            grep -rn --include=*.h -E "(extern )?(const )?struct [a-z_]+ +\*?$d(;|\[)" "$H" 2>/dev/null | head -4 || true
+          done
+
       - name: Build ${{ matrix.kmi }}
         run: |
           make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
