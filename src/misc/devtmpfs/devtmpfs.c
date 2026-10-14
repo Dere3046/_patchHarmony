@@ -204,7 +204,31 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	}
 	err = droid_lkm_devtmpfs_ks.reconfigure_single(s, flags, data);
 	if (err < 0) {
-		droid_lkm_devtmpfs_ks.deactivate_locked_super(s);
+		/*
+		 * the reference taken above is dropped here and the write lock is
+		 * released here, neither of them through deactivate_locked_super().
+		 * that call was taking the mount down twice over. the reference this
+		 * function took is the only one at this point -- the mount has not
+		 * reached the VFS far enough for it to hold one -- so s_active fell
+		 * to zero and deactivate_locked_super() ran kill_sb(), which is
+		 * kill_litter_super, over this module's own internal superblock: the
+		 * tree every container's /dev is built from was being torn down by a
+		 * mount that had failed. that is the device's
+		 *
+		 *     devtmpfs ready: 0 nodes
+		 *
+		 * with every vfs_mknod in the walk refused from then on.
+		 *
+		 * and its release of the write lock is conditional: put_super() only
+		 * runs up_write(&s->s_umount) when s_count reaches zero, and the
+		 * internal mount this module holds keeps s_count at one. so the lock
+		 * this function took was never given back, and every sync
+		 * (iterate_supers) and every later mount of devtmpfs blocked from then
+		 * on for as long as the module stayed loaded -- which is why a
+		 * container whose /dev is this filesystem could never be stopped.
+		 */
+		atomic_dec(&s->s_active);
+		up_write(&s->s_umount);
 		mutex_unlock(&droid_lkm_devtmpfs_lock);
 		return ERR_PTR(err);
 	}
@@ -212,13 +236,9 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	root = dget(s->s_root);
 	/*
 	 * reconfigure_single() is called with s_umount held and leaves it held, so
-	 * the success path has to release it here. the error path above hands the
-	 * lock to deactivate_locked_super(), which is the "locked" variant and
-	 * drops it itself. without this the first userspace mount of devtmpfs
-	 * leaves the internal superblock write locked for good, and every later
-	 * superblock operation -- the next mount, kern_unmount() from release or
-	 * from unload -- blocks in down_write(&s->s_umount) with nothing to time
-	 * it out
+	 * this path releases it. the error path above releases it itself as well,
+	 * which is the point of that change: the variant that hands the lock to
+	 * deactivate_locked_super() is the one that never gave it back
 	 */
 	up_write(&s->s_umount);
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
@@ -902,22 +922,15 @@ int droid_lkm_misc_devtmpfs_init(void)
 	droid_lkm_devtmpfs_internal_type.kill_sb = droid_lkm_devtmpfs_ks.kill_litter_super;
 
 	/*
-	 * SB_KERNMOUNT, the flag upstream's kern_mount() passes here and this call
-	 * used to leave at zero. an internal mount without it is an ordinary user
-	 * mount of an ordinary superblock, and the difference is visible on the
-	 * device: the walk that fills the tree reported
-	 *
-	 *     devtmpfs ready: 0 nodes
-	 *
-	 * with every vfs_mknod in it refused, and the internal superblock's write
-	 * lock was left held afterwards, which then wedged iterate_supers() (every
-	 * sync) and every later mount of devtmpfs for as long as the module stayed
-	 * loaded. a container whose /dev is this filesystem could not be stopped
-	 * because of it: its mount never returned. kern_mount() is the shape
-	 * upstream ships for exactly this object
+	 * flags 0, and not SB_KERNMOUNT. upstream reaches this object through
+	 * kern_mount(), which passes SB_KERNMOUNT, and it was tried here: a mount
+	 * of the public type then fails with -EINVAL before anything else happens,
+	 * because the kernel that comes back is one userspace is not allowed to
+	 * graft. the internal mount is made for userspace to mount through this
+	 * type, so the flag does not belong
 	 */
 	droid_lkm_devtmpfs_mnt = droid_lkm_devtmpfs_ks.vfs_kern_mount(
-		&droid_lkm_devtmpfs_internal_type, SB_KERNMOUNT, "devtmpfs", opts);
+		&droid_lkm_devtmpfs_internal_type, 0, "devtmpfs", opts);
 	if (IS_ERR(droid_lkm_devtmpfs_mnt)) {
 		err = PTR_ERR(droid_lkm_devtmpfs_mnt);
 		droid_lkm_devtmpfs_mnt = NULL;
