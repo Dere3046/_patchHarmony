@@ -138,6 +138,14 @@ static int __init droid_lkm_init(void)
 	droid_lkm_hook_policy_apply();
 
 	/*
+	 * the wall goes up before anything new runs. everything above is the
+	 * code the previous build already ran on this device, so a fault from
+	 * here on is the part being debugged, and it has to be readable before
+	 * the device goes down with it
+	 */
+	droid_lkm_guard_arm();
+
+	/*
 	 * the OPPO vendor fixup wants the engine, so it goes first. it used to
 	 * be a ko that refused to load when its hook would not install; in here
 	 * that refusal would take ipcns and the userns half down with a vendor
@@ -233,6 +241,7 @@ static void __exit droid_lkm_exit(void)
 	droid_lkm_pidns_exit();
 	droid_lkm_keepalive_release();
 	droid_lkm_compat_phase_exit();
+	droid_lkm_guard_disarm();
 	hk_exit();
 	droid_lkm_info("unloaded\n");
 }

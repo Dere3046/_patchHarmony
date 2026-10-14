@@ -98,6 +98,14 @@ void droid_lkm_hook_report(void);
 void droid_lkm_hook_policy_apply(void);
 
 /*
+ * the blast wall: while it is armed a panic prints and returns instead of
+ * taking the device down. armed from the init path right after the policy, so
+ * it covers every install site that follows. guard=0 turns it off
+ */
+int droid_lkm_guard_arm(void);
+void droid_lkm_guard_disarm(void);
+
+/*
  * 6.18 moved the namespace type out of proc_ns_operations and into
  * ns_common::ns_type. every place that hands a namespace its operations goes
  * through this, so no call site carries the difference
