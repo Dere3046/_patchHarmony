@@ -118,6 +118,14 @@ ccflags-y += -I$(src)/src/misc -I$(src)/src/misc/xt -I$(src)/src/misc/userns
 ccflags-y += -I$(src)/src/misc/devtmpfs
 ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 
+# the target kernel's own tree, which the ddk lays out at $(KDIR)/source. a few
+# declarations this module needs are in headers the kernel never publishes, the
+# driver core's drivers/base/base.h above all, and a function pointer's type has to
+# come from the kernel's declaration rather than a second guess at it: clang's cfi
+# hashes the whole type, so a guess that drifts by one qualifier is a fatal cfi
+# failure on the device
+ccflags-y += -I$(KDIR)/source
+
 # 6.18 turns on -Wmissing-prototypes, and this module both defines kernel
 # names the newer kernel stops declaring and exposes entry points through
 # headers the shim files do not include; older compilers ignore the flag

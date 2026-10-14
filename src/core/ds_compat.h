@@ -124,13 +124,17 @@ static inline void *droid_lkm_msg_alloc(droid_lkm_msg_bucket_t *buckets,
  * these two macros. the value handed in is droid_lkm_caps.idmap_none, which is
  * nop_mnt_idmap or init_user_ns for the running kernel. ipc_mqueue_compat.h
  * folds the same shape under DROID_LKM_MQ_IDMAP_ARG for its vfs callees.
+ *
+ * the variable is named idmap on both branches so a body that has to read it, and
+ * not only hand it on, can. the two spells different types, which is the whole
+ * point of the pair, but a call site should not have to know which one it got.
  */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 #define DROID_LKM_IDMAP_PARAM	struct mnt_idmap *idmap,
 #define DROID_LKM_IDMAP_PASS	idmap,
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
-#define DROID_LKM_IDMAP_PARAM	struct user_namespace *mnt_userns,
-#define DROID_LKM_IDMAP_PASS	mnt_userns,
+#define DROID_LKM_IDMAP_PARAM	struct user_namespace *idmap,
+#define DROID_LKM_IDMAP_PASS	idmap,
 #else
 #define DROID_LKM_IDMAP_PARAM
 #define DROID_LKM_IDMAP_PASS

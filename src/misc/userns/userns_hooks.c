@@ -35,6 +35,7 @@
 
 #include "misc.h"
 #include "misc_ksym.h"
+#include "ds_compat.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -50,7 +51,12 @@ static int (*droid_lkm_userns_nsproxy_orig)(unsigned long unshare_flags,
 					    struct fs_struct *new_fs);
 static int (*droid_lkm_userns_creds_orig)(struct task_struct *p,
 					  unsigned long clone_flags);
-static bool (*droid_lkm_userns_inodecap_orig)(struct mnt_idmap *idmap,
+/*
+ * capable_wrt_inode_uidgid's mapping argument moved with inode_permission's, an id mapping
+ * from 6.3 and a user namespace before that, so it folds through the same pair. spelling it
+ * struct mnt_idmap unconditionally is a cfi hash mismatch on 5.15 and 6.1.
+ */
+static bool (*droid_lkm_userns_inodecap_orig)(DROID_LKM_IDMAP_PARAM
 					      const struct inode *inode, int cap);
 
 /*
@@ -155,17 +161,23 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 	return 0;
 }
 
-__nocfi noinline bool droid_lkm_userns_inodecap_wrap(struct mnt_idmap *idmap,
+__nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 						     const struct inode *inode,
 						     int cap)
 {
 	struct droid_lkm_userns *u;
 
-	if (droid_lkm_userns_inodecap_orig(idmap, inode, cap))
+	if (droid_lkm_userns_inodecap_orig(DROID_LKM_IDMAP_PASS inode, cap))
 		return true;
 
-	/* an idmapped mount is a different rule set, it arrives with the lens */
-	if (droid_lkm_misc_ks.nop_mnt_idmap && idmap != droid_lkm_misc_ks.nop_mnt_idmap)
+	/*
+	 * an idmapped mount is a different rule set, it arrives with the lens. the
+	 * comparison is through void * because below 6.3 the argument above is a user
+	 * namespace while the sentinel is an id mapping, and a kernel that old carries
+	 * no sentinel at all: the field is NULL there and the first test short circuits
+	 */
+	if (droid_lkm_misc_ks.nop_mnt_idmap &&
+	    (const void *)idmap != (const void *)droid_lkm_misc_ks.nop_mnt_idmap)
 		return false;
 
 	u = droid_lkm_userns_of(current);
