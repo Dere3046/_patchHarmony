@@ -8,7 +8,9 @@
 
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/printk.h>
+#include <linux/string.h>
 
 #include "core.h"
 
@@ -25,10 +27,24 @@ extern bool droid_lkm_misc_verbose;
 			pr_info("[" DROID_LKM_MISC_TAG "/dbg] " fmt, ##__VA_ARGS__); \
 	} while (0)
 
-/* the GKI gate rejects part of the export list, so unexported and risky symbols are resolved by name */
+/*
+ * the GKI gate rejects part of the export list, so unexported and risky symbols are resolved by name.
+ *
+ * the resolver falls back to the module symbol tables when the kernel does not carry a
+ * name, and this module defines shims under the kernel's own names (lookup_one_len and
+ * vfs_unlink are two that the port resolves by name), so a name the kernel lost comes
+ * back as the shim defined here. droid_lkm_sym() has always refused an address that
+ * lands in this module for exactly that reason; misc resolves the same kind of names and
+ * had no such rule, which hands a caller its own shim instead of the kernel symbol.
+ */
 static inline unsigned long __nocfi droid_lkm_misc_sym(const char *name)
 {
-	return kallrecon_klp(name);
+	unsigned long addr = kallrecon_klp(name);
+
+	if (addr && within_module(addr, THIS_MODULE) &&
+	    strncmp(name, DROID_LKM_MISC_TAG, sizeof(DROID_LKM_MISC_TAG) - 1))
+		return 0;
+	return addr;
 }
 
 #endif
