@@ -32,8 +32,23 @@
  *     panic_on_oops and panic sysctls first: they cost nothing and they tell
  *     the two cases apart.
  *
- * guard=0 puts the real panic back, which is what to use once the fault is
- * understood: a wall that never falls is a device that never reboots.
+ * What the device then showed is why it is off by default. In the report that
+ * found the devtmpfs double dput, one walk that freed a dentry it still held put
+ * four oopses through here inside a millisecond -- "Fatal exception in
+ * interrupt", "Aiee, killing interrupt handler!", "Attempted to kill the idle
+ * task!" -- and every one of them was answered and returned from. Returning is
+ * only sound for a fault in process context, on a task that can be killed. In
+ * interrupt context, or on the idle task, it hands the kernel back a machine
+ * whose locks and interrupt state are already gone, and the freeze that follows
+ * is worse than the reboot it replaced: nothing more is printed, and the
+ * watchdog takes it down anyway a few seconds later. The report's own trace was
+ * cut off at that point, mid-crash.
+ *
+ * guard=1 arms it. A panic still prints through it, but a panic that should have
+ * rebooted does not, so arm it only when the alternative is losing the trace
+ * outright -- and note that the device keeps its own crash log across a reset.
+ * /data/persist_log carries the last kmsg here, which is where the trace above
+ * was read from.
  */
 
 #include <linux/kernel.h>
@@ -50,9 +65,10 @@
 #include "ds_ksym.h"
 #include "hk_inline.h"
 
-static bool droid_lkm_guard_on = true;
+/* off by default, see the note at the top; guard=1 arms the wall */
+static bool droid_lkm_guard_on;
 module_param_named(guard, droid_lkm_guard_on, bool, 0444);
-MODULE_PARM_DESC(guard, "answer panic() with a backtrace instead of taking the device down, default 1");
+MODULE_PARM_DESC(guard, "arm the panic wall, default 0: a panic in interrupt context is returned from and leaves the kernel running with its locks and interrupt state gone");
 
 static struct hk_inline droid_lkm_guard_hook;
 static bool droid_lkm_guard_armed;
