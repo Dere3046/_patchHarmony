@@ -199,6 +199,28 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 			   current->comm, current->pid, flags,
 			   data ? (const char *)data : "-");
 
+	/*
+	 * a tree with no nodes is not a devtmpfs, and serving one is worse than
+	 * serving nothing. the mount itself is what goes wrong: this path hands the
+	 * vfs a mount of the internal superblock, and on this kernel the mount
+	 * machinery leaves that superblock's write lock held once it has run --
+	 * a probe read s_umount.count as 0x0 as this function returned and the very
+	 * next mount blocked on the same lock. everything that walks superblocks
+	 * then blocks with it, sync included, and a container whose /dev is this
+	 * filesystem cannot be stopped: its mount never returns and SIGKILL cannot
+	 * reach the waiters.
+	 *
+	 * the walk refuses every node on this device (623 devices carried a devt and
+	 * not one vfs_mknod succeeded -- EPERM and EACCES, from the kernel thread's
+	 * context rather than from the superblock, which takes a userspace mknod
+	 * without complaint), so the count stays zero and this refuses. when that is
+	 * fixed the count goes up on its own and mounts are served again.
+	 */
+	if (!droid_lkm_devtmpfs_nodes) {
+		droid_lkm_misc_warn("devtmpfs: refusing a mount, the tree has no nodes\n");
+		return ERR_PTR(-ENODEV);
+	}
+
 	mutex_lock(&droid_lkm_devtmpfs_lock);
 
 	if (!droid_lkm_devtmpfs_mnt) {
