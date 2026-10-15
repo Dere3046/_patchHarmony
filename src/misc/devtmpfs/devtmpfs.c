@@ -200,27 +200,12 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 			   data ? (const char *)data : "-");
 
 	/*
-	 * a tree with no nodes is not a devtmpfs, and serving one is worse than
-	 * serving nothing. the mount itself is what goes wrong: this path hands the
-	 * vfs a mount of the internal superblock, and on this kernel the mount
-	 * machinery leaves that superblock's write lock held once it has run --
-	 * a probe read s_umount.count as 0x0 as this function returned and the very
-	 * next mount blocked on the same lock. everything that walks superblocks
-	 * then blocks with it, sync included, and a container whose /dev is this
-	 * filesystem cannot be stopped: its mount never returns and SIGKILL cannot
-	 * reach the waiters.
-	 *
-	 * the walk refuses every node on this device (623 devices carried a devt and
-	 * not one vfs_mknod succeeded -- EPERM and EACCES, from the kernel thread's
-	 * context rather than from the superblock, which takes a userspace mknod
-	 * without complaint), so the count stays zero and this refuses. when that is
-	 * fixed the count goes up on its own and mounts are served again.
+	 * no guard on the node count here, on purpose. refusing to serve while the
+	 * walk has produced nothing was a stopgap for the wedge this file used to
+	 * cause on mount, and that wedge had a different cause which is fixed
+	 * below. an empty tree is still a working mount, and refusing it would only
+	 * hide the node creation problem rather than answer for it
 	 */
-	if (!droid_lkm_devtmpfs_nodes) {
-		droid_lkm_misc_warn("devtmpfs: refusing a mount, the tree has no nodes\n");
-		return ERR_PTR(-ENODEV);
-	}
-
 	mutex_lock(&droid_lkm_devtmpfs_lock);
 
 	if (!droid_lkm_devtmpfs_mnt) {
@@ -253,27 +238,17 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	droid_lkm_misc_dbg("devtmpfs: reconfigure_single -> %d\n", err);
 	if (err < 0) {
 		/*
-		 * the reference taken above is dropped here and the write lock is
-		 * released here, neither of them through deactivate_locked_super().
-		 * that call was taking the mount down twice over. the reference this
-		 * function took is the only one at this point -- the mount has not
-		 * reached the VFS far enough for it to hold one -- so s_active fell
-		 * to zero and deactivate_locked_super() ran kill_sb(), which is
-		 * kill_litter_super, over this module's own internal superblock: the
-		 * tree every container's /dev is built from was being torn down by a
-		 * mount that had failed. that is the device's
+		 * this path took a reference and the write lock, so it gives both
+		 * back: the reference by hand and the lock with up_write(). that is
+		 * what upstream's deactivate_locked_super() does here as well -- its
+		 * else branch is that same up_write(), and it does not reach the
+		 * kill_sb() branch because s_active was incremented above and this
+		 * only removes that increment (2 back to 1).
 		 *
-		 *     devtmpfs ready: 0 nodes
-		 *
-		 * with every vfs_mknod in the walk refused from then on.
-		 *
-		 * and its release of the write lock is conditional: put_super() only
-		 * runs up_write(&s->s_umount) when s_count reaches zero, and the
-		 * internal mount this module holds keeps s_count at one. so the lock
-		 * this function took was never given back, and every sync
-		 * (iterate_supers) and every later mount of devtmpfs blocked from then
-		 * on for as long as the module stayed loaded -- which is why a
-		 * container whose /dev is this filesystem could never be stopped.
+		 * an earlier revision of this comment claimed the opposite, that
+		 * s_active fell to zero and kill_litter_super tore this module's own
+		 * internal superblock down. it does not, and the node creation problem
+		 * that was blamed on it has a different cause.
 		 */
 		atomic_dec(&s->s_active);
 		up_write(&s->s_umount);
@@ -284,13 +259,25 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 
 	root = dget(s->s_root);
 	/*
-	 * reconfigure_single() is called with s_umount held and leaves it held, so
-	 * this path releases it. the error path above releases it itself as well,
-	 * which is the point of that change: the variant that hands the lock to
-	 * deactivate_locked_super() is the one that never gave it back
+	 * the write lock stays held, and that is the contract this callback is
+	 * called under, not an oversight. fs/super.c's alloc_super() hands a new
+	 * superblock out with s_umount already write locked, so the vfs expects the
+	 * filesystem's get_tree to return with it still held and releases it
+	 * itself: fs/namespace.c's do_new_mount_fc() runs
+	 *
+	 *     up_write(&sb->s_umount);
+	 *
+	 * after vfs_get_tree() succeeds. upstream's public_dev_mount() returns
+	 * dget(s->s_root) the same way, holding the lock.
+	 *
+	 * a release here is therefore a *second* release of the same lock, and it
+	 * takes the count to -1, which reads as permanently held: every later
+	 * down_write() blocks, and so does every down_read() -- which includes
+	 * iterate_supers(), so every sync, and every mount of devtmpfs. that was
+	 * this file's wedge: a container whose /dev is this filesystem could not be
+	 * stopped because its own mount never returned. do not add an up_write here
 	 */
-	up_write(&s->s_umount);
-	droid_lkm_devtmpfs_lock_state("released(ok)", s);
+	droid_lkm_devtmpfs_lock_state("lock left held for the vfs", s);
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
 
 	return root;
@@ -988,12 +975,12 @@ int droid_lkm_misc_devtmpfs_init(void)
 	droid_lkm_devtmpfs_internal_type.kill_sb = droid_lkm_devtmpfs_ks.kill_litter_super;
 
 	/*
-	 * flags 0, and not SB_KERNMOUNT. upstream reaches this object through
-	 * kern_mount(), which passes SB_KERNMOUNT, and it was tried here: a mount
-	 * of the public type then fails with -EINVAL before anything else happens,
-	 * because the kernel that comes back is one userspace is not allowed to
-	 * graft. the internal mount is made for userspace to mount through this
-	 * type, so the flag does not belong
+	 * flags 0, which is what upstream passes: drivers/base/devtmpfs.c makes
+	 * this object with vfs_kern_mount(&internal_fs_type, 0, "devtmpfs", opts),
+	 * not with kern_mount(). it was briefly changed to SB_KERNMOUNT here on the
+	 * theory that the flag was the difference from upstream, and a mount of the
+	 * public type then failed with -EINVAL; the source settles it, upstream
+	 * passes zero
 	 */
 	droid_lkm_devtmpfs_mnt = droid_lkm_devtmpfs_ks.vfs_kern_mount(
 		&droid_lkm_devtmpfs_internal_type, 0, "devtmpfs", opts);
