@@ -10,7 +10,7 @@
  * of "devtmpfs" by anyone returns that same superblock, which is what makes it
  * one /dev for the whole system.
  *
- * Four things differ from upstream, all deliberate.
+ * Five things differ from upstream, all deliberate.
  *
  *   - Upstream mounts the result over /dev during boot. This module is loaded
  *     long after the platform's device manager has built /dev, and mounting over
@@ -34,6 +34,11 @@
  *     unloading, the same discipline as unmounting a filesystem before rmmod.
  *   - Upstream sees every device register from early boot. This walks the
  *     devices that already exist first, through devices_kset.
+ *   - Upstream populates before the device's SELinux policy has loaded, so its
+ *     devtmpfsd thread -- the kernel domain -- is free to mknod. This loads
+ *     minutes later, when the policy is in force and refuses that domain, which
+ *     is what leaves the tree empty. The worker borrows the authorized loader's
+ *     credentials instead, and no policy is changed to make room for it.
  *
  * devtmpfs_create_node() and devtmpfs_delete_node() are what device_add() and
  * device_del() call, and those two calls are compiled out with the same option,
@@ -118,6 +123,10 @@ struct droid_lkm_devtmpfs_ksym {
 	typeof(&vfs_getattr)		vfs_getattr;
 
 	typeof(&device_get_devnode)	device_get_devnode;
+	/* the worker creates nodes as the loader, not as the kernel domain */
+	typeof(&get_task_cred)		get_task_cred;
+	typeof(&override_creds)		override_creds;
+	typeof(&revert_creds)		revert_creds;
 	const struct class		*block_class;
 	/* every device the driver core knows, walked once to fill the tree */
 	struct kset			*devices_kset;
@@ -129,6 +138,19 @@ static struct task_struct *droid_lkm_devtmpfs_thread;
 static struct vfsmount *droid_lkm_devtmpfs_mnt;
 static bool droid_lkm_devtmpfs_registered;
 static unsigned long droid_lkm_devtmpfs_nodes;
+
+/*
+ * the credentials the worker creates nodes under. a kernel thread runs as the
+ * kernel domain, and this device's policy does not let that domain mknod once
+ * the policy has loaded -- upstream devtmpfs never meets this because it
+ * populates /dev during boot, before there is a policy to refuse it. the
+ * authorized loader's credentials are ones the policy already allows, so the
+ * worker borrows them for the length of a request and nothing here changes a
+ * policy. the borrowing is why the walk produces nodes at all: without it every
+ * create and mkdir comes back denied, and the refusal is dontaudited away, so
+ * the only symptom is a tree that stays empty
+ */
+static const struct cred *droid_lkm_devtmpfs_node_cred;
 
 /* how many node failures have been named, so a walk of hundreds stays readable */
 static unsigned int droid_lkm_devtmpfs_fail_log;
@@ -707,6 +729,16 @@ static int droid_lkm_devtmpfs_handle(const char *name, umode_t mode, kuid_t uid,
 
 static int droid_lkm_devtmpfs_thread_fn(void *p)
 {
+	const struct cred *old_cred;
+
+	/*
+	 * everything the loop below does is done under the loader's credentials,
+	 * see droid_lkm_devtmpfs_node_cred above: a kernel thread otherwise runs
+	 * as the kernel domain, which this device's policy does not let create
+	 * nodes
+	 */
+	old_cred = droid_lkm_devtmpfs_ks.override_creds(droid_lkm_devtmpfs_node_cred);
+
 	while (!kthread_should_stop()) {
 		spin_lock(&droid_lkm_devtmpfs_req_lock);
 		while (droid_lkm_devtmpfs_requests) {
@@ -729,6 +761,8 @@ static int droid_lkm_devtmpfs_thread_fn(void *p)
 		spin_unlock(&droid_lkm_devtmpfs_req_lock);
 		schedule();
 	}
+
+	droid_lkm_devtmpfs_ks.revert_creds(old_cred);
 
 	return 0;
 }
@@ -826,6 +860,9 @@ static int droid_lkm_devtmpfs_resolve(void)
 		{ "vfs_rmdir",		(void **)&droid_lkm_devtmpfs_ks.vfs_rmdir },
 		{ "vfs_getattr",	(void **)&droid_lkm_devtmpfs_ks.vfs_getattr },
 		{ "device_get_devnode",	(void **)&droid_lkm_devtmpfs_ks.device_get_devnode },
+		{ "get_task_cred",	(void **)&droid_lkm_devtmpfs_ks.get_task_cred },
+		{ "override_creds",	(void **)&droid_lkm_devtmpfs_ks.override_creds },
+		{ "revert_creds",	(void **)&droid_lkm_devtmpfs_ks.revert_creds },
 		{ "block_class",	(void **)&droid_lkm_devtmpfs_ks.block_class },
 	};
 	unsigned long devices_kset;
@@ -1006,6 +1043,19 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_registered = true;
 
+	/*
+	 * taken here because this is the last point that runs as the loader: the
+	 * thread created just below is a kernel thread from its first instruction,
+	 * and anything it did without these would be done as the kernel domain
+	 */
+	droid_lkm_devtmpfs_node_cred = droid_lkm_devtmpfs_ks.get_task_cred(current);
+	if (!droid_lkm_devtmpfs_node_cred) {
+		err = -ENOMEM;
+		droid_lkm_misc_err("devtmpfs: cannot take the loader's credentials\n");
+		droid_lkm_misc_report("devtmpfs", "unsupported", "credentials");
+		goto out_unregister;
+	}
+
 	droid_lkm_devtmpfs_thread = kthread_run(droid_lkm_devtmpfs_thread_fn, NULL,
 						"ddevtmpfs");
 	if (IS_ERR(droid_lkm_devtmpfs_thread)) {
@@ -1013,7 +1063,7 @@ int droid_lkm_misc_devtmpfs_init(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		droid_lkm_misc_err("devtmpfs: no thread: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "no thread");
-		goto out_unregister;
+		goto out_creds;
 	}
 
 	err = droid_lkm_inline_hook_checked(&droid_lkm_devtmpfs_add_hook, "device_add",
@@ -1049,6 +1099,9 @@ out_unhook_add:
 out_stop:
 	kthread_stop(droid_lkm_devtmpfs_thread);
 	droid_lkm_devtmpfs_thread = NULL;
+out_creds:
+	put_cred(droid_lkm_devtmpfs_node_cred);
+	droid_lkm_devtmpfs_node_cred = NULL;
 out_unregister:
 	droid_lkm_devtmpfs_ks.unregister_filesystem(&droid_lkm_devtmpfs_type);
 	droid_lkm_devtmpfs_registered = false;
@@ -1084,6 +1137,11 @@ int droid_lkm_misc_devtmpfs_release(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		kthread_stop(thread);
 		droid_lkm_devtmpfs_drain();
+	}
+
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
 	}
 
 	if (droid_lkm_devtmpfs_registered) {
@@ -1126,6 +1184,11 @@ void droid_lkm_misc_devtmpfs_exit(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		kthread_stop(thread);
 		droid_lkm_devtmpfs_drain();
+	}
+
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
 	}
 
 	if (droid_lkm_devtmpfs_registered) {
