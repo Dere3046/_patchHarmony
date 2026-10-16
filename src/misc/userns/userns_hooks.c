@@ -126,7 +126,9 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 {
 	struct droid_lkm_userns *u;
-	struct cred *old;
+	/* get_task_cred() is const from 5.15 on and plain struct cred * before that,
+	 * so the const-qualified declaration is the one both accept */
+	const struct cred *old;
 	unsigned long rest;
 	int ret;
 
@@ -157,8 +159,10 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	rest = flags & ~CLONE_NEWUSER;
 	ret = droid_lkm_userns_unshare_orig(rest);
 	if (ret) {
-		/* nothing was created, so nothing may keep the namespace */
-		droid_lkm_misc_ks.commit_creds(old);
+		/* nothing was created, so nothing may keep the namespace. commit_creds()
+		 * takes it non-const because it may write to it, and the reference this
+		 * call consumes is the one the reference count above was taken for */
+		droid_lkm_misc_ks.commit_creds((struct cred *)old);
 		droid_lkm_userns_destroy(u);
 		return ret;
 	}
