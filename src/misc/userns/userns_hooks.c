@@ -102,9 +102,31 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 	return ret;
 }
 
+/*
+ * The credential has to be in place *before* the original runs, and that
+ * ordering is the whole point of this function.
+ *
+ * unshare(CLONE_NEWUSER|CLONE_NEWNS) is one syscall, and ksys_unshare() builds
+ * every namespace it was asked for before it would have committed anything:
+ * upstream gets away with that because unshare_userns() hands the pending user
+ * namespace to unshare_nsproxy_namespaces() as an argument, and
+ * create_new_namespaces() then takes its owner from there. This kernel has no
+ * unshare_userns(), so there is no such argument to read, and the only place a
+ * constructor can find the new owner is current - which carries it once the
+ * credential is committed and not a moment earlier.
+ *
+ * Install late and the mount namespace comes out owned by the host: may_mount()
+ * (inlined into path_mount() and fsopen(), out of reach of any hook) then asks
+ * init_user_ns for CAP_SYS_ADMIN on behalf of a task that sits below it, and
+ * cap_capable() refuses - a task in a child namespace is never capable in an
+ * ancestor. The visible symptom is fsopen("tmpfs") = -EPERM, which is what
+ * every mount in the container fails with, and a copy_mnt_ns() line saying the
+ * owner it was handed is not ours.
+ */
 __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 {
 	struct droid_lkm_userns *u;
+	struct cred *old;
 	unsigned long rest;
 	int ret;
 
@@ -120,18 +142,30 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	if (!u)
 		return -ENOMEM;
 
-	rest = flags & ~CLONE_NEWUSER;
-	ret = droid_lkm_userns_unshare_orig(rest);
+	/* holding the old credential is what makes the rollback below balance: the
+	 * task holds two references to it, commit_creds() puts both back, and this
+	 * is the one it consumes */
+	old = get_task_cred(current);
+
+	ret = droid_lkm_userns_install_current(u);
 	if (ret) {
+		put_cred(old);
 		droid_lkm_userns_destroy(u);
 		return ret;
 	}
 
-	ret = droid_lkm_userns_install_current(u);
-	if (ret)
-		droid_lkm_misc_warn("unshare: credential install failed: %d\n", ret);
+	rest = flags & ~CLONE_NEWUSER;
+	ret = droid_lkm_userns_unshare_orig(rest);
+	if (ret) {
+		/* nothing was created, so nothing may keep the namespace */
+		droid_lkm_misc_ks.commit_creds(old);
+		droid_lkm_userns_destroy(u);
+		return ret;
+	}
 
-	return ret;
+	put_cred(old);
+
+	return 0;
 }
 
 __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
@@ -156,11 +190,19 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 		return ret;
 	}
 
-	/* the child has not run and copy_creds() built a fresh credential, so this is race free */
 	/*
-	 * both pointers: __task_cred() reads real_cred, so a task whose cred alone carries
-	 * the namespace stays invisible to droid_lkm_userns_of() - which is where ours=0
-	 * came from, and with it the whole mount path kept the host as owner.
+	 * the child has not run and copy_creds() built a fresh credential, so this is race free.
+	 *
+	 * both pointers, because the two readers disagree on which one matters: the kernel's
+	 * copy_namespaces() asks task_cred_xxx(p, user_ns), which is p->cred, while
+	 * droid_lkm_userns_of() asks __task_cred(), which is real_cred. here they are still the
+	 * same object - the split only happens once a task takes an override - but writing both
+	 * is what keeps the namespace's owner and the credential in step for either reader.
+	 *
+	 * this path needs no ordering fix: copy_process() copies credentials before it copies
+	 * namespaces, so by the time copy_namespaces() reads p->cred the namespace is already
+	 * installed. unshare() has no such luxury and carries the reordering in
+	 * droid_lkm_userns_unshare_wrap().
 	 */
 	droid_lkm_userns_install_cred((struct cred *)p->real_cred, u);
 	droid_lkm_userns_install_cred((struct cred *)p->cred, u);
