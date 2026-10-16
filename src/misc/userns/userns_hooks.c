@@ -35,6 +35,8 @@
 
 #include "misc.h"
 #include "misc_ksym.h"
+#include "ds.h"
+#include "ds_compat.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -50,7 +52,12 @@ static int (*droid_lkm_userns_nsproxy_orig)(unsigned long unshare_flags,
 					    struct fs_struct *new_fs);
 static int (*droid_lkm_userns_creds_orig)(struct task_struct *p,
 					  unsigned long clone_flags);
-static bool (*droid_lkm_userns_inodecap_orig)(struct mnt_idmap *idmap,
+/*
+ * capable_wrt_inode_uidgid's mapping argument moved with inode_permission's, an id mapping
+ * from 6.3 and a user namespace before that, so it folds through the same pair. spelling it
+ * struct mnt_idmap unconditionally is a cfi hash mismatch on 5.15 and 6.1.
+ */
+static bool (*droid_lkm_userns_inodecap_orig)(DROID_LKM_IDMAP_PARAM
 					      const struct inode *inode, int cap);
 
 /*
@@ -95,9 +102,33 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 	return ret;
 }
 
+/*
+ * The credential has to be in place *before* the original runs, and that
+ * ordering is the whole point of this function.
+ *
+ * unshare(CLONE_NEWUSER|CLONE_NEWNS) is one syscall, and ksys_unshare() builds
+ * every namespace it was asked for before it would have committed anything:
+ * upstream gets away with that because unshare_userns() hands the pending user
+ * namespace to unshare_nsproxy_namespaces() as an argument, and
+ * create_new_namespaces() then takes its owner from there. This kernel has no
+ * unshare_userns(), so there is no such argument to read, and the only place a
+ * constructor can find the new owner is current - which carries it once the
+ * credential is committed and not a moment earlier.
+ *
+ * Install late and the mount namespace comes out owned by the host: may_mount()
+ * (inlined into path_mount() and fsopen(), out of reach of any hook) then asks
+ * init_user_ns for CAP_SYS_ADMIN on behalf of a task that sits below it, and
+ * cap_capable() refuses - a task in a child namespace is never capable in an
+ * ancestor. The visible symptom is fsopen("tmpfs") = -EPERM, which is what
+ * every mount in the container fails with, and a copy_mnt_ns() line saying the
+ * owner it was handed is not ours.
+ */
 __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 {
 	struct droid_lkm_userns *u;
+	/* get_task_cred() is const from 5.15 on and plain struct cred * before that,
+	 * so the const-qualified declaration is the one both accept */
+	const struct cred *old;
 	unsigned long rest;
 	int ret;
 
@@ -113,18 +144,32 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	if (!u)
 		return -ENOMEM;
 
-	rest = flags & ~CLONE_NEWUSER;
-	ret = droid_lkm_userns_unshare_orig(rest);
+	/* holding the old credential is what makes the rollback below balance: the
+	 * task holds two references to it, commit_creds() puts both back, and this
+	 * is the one it consumes */
+	old = get_task_cred(current);
+
+	ret = droid_lkm_userns_install_current(u);
 	if (ret) {
+		put_cred(old);
 		droid_lkm_userns_destroy(u);
 		return ret;
 	}
 
-	ret = droid_lkm_userns_install_current(u);
-	if (ret)
-		droid_lkm_misc_warn("unshare: credential install failed: %d\n", ret);
+	rest = flags & ~CLONE_NEWUSER;
+	ret = droid_lkm_userns_unshare_orig(rest);
+	if (ret) {
+		/* nothing was created, so nothing may keep the namespace. commit_creds()
+		 * takes it non-const because it may write to it, and the reference this
+		 * call consumes is the one the reference count above was taken for */
+		droid_lkm_misc_ks.commit_creds((struct cred *)old);
+		droid_lkm_userns_destroy(u);
+		return ret;
+	}
 
-	return ret;
+	put_cred(old);
+
+	return 0;
 }
 
 __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
@@ -149,23 +194,43 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 		return ret;
 	}
 
-	/* the child has not run and copy_creds() built a fresh credential, so this is race free */
+	/*
+	 * the child has not run and copy_creds() built a fresh credential, so this is race free.
+	 *
+	 * both pointers, because the two readers disagree on which one matters: the kernel's
+	 * copy_namespaces() asks task_cred_xxx(p, user_ns), which is p->cred, while
+	 * droid_lkm_userns_of() asks __task_cred(), which is real_cred. here they are still the
+	 * same object - the split only happens once a task takes an override - but writing both
+	 * is what keeps the namespace's owner and the credential in step for either reader.
+	 *
+	 * this path needs no ordering fix: copy_process() copies credentials before it copies
+	 * namespaces, so by the time copy_namespaces() reads p->cred the namespace is already
+	 * installed. unshare() has no such luxury and carries the reordering in
+	 * droid_lkm_userns_unshare_wrap().
+	 */
+	droid_lkm_userns_install_cred((struct cred *)p->real_cred, u);
 	droid_lkm_userns_install_cred((struct cred *)p->cred, u);
 
 	return 0;
 }
 
-__nocfi noinline bool droid_lkm_userns_inodecap_wrap(struct mnt_idmap *idmap,
+__nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 						     const struct inode *inode,
 						     int cap)
 {
 	struct droid_lkm_userns *u;
 
-	if (droid_lkm_userns_inodecap_orig(idmap, inode, cap))
+	if (droid_lkm_userns_inodecap_orig(DROID_LKM_IDMAP_PASS inode, cap))
 		return true;
 
-	/* an idmapped mount is a different rule set, it arrives with the lens */
-	if (droid_lkm_misc_ks.nop_mnt_idmap && idmap != droid_lkm_misc_ks.nop_mnt_idmap)
+	/*
+	 * an idmapped mount is a different rule set, it arrives with the lens. the
+	 * comparison is through void * because below 6.3 the argument above is a user
+	 * namespace while the sentinel is an id mapping, and a kernel that old carries
+	 * no sentinel at all: the field is NULL there and the first test short circuits
+	 */
+	if (droid_lkm_misc_ks.nop_mnt_idmap &&
+	    (const void *)idmap != (const void *)droid_lkm_misc_ks.nop_mnt_idmap)
 		return false;
 
 	u = droid_lkm_userns_of(current);
@@ -185,7 +250,7 @@ static int droid_lkm_userns_hook_one(struct hk_inline *h, const char *sym,
 {
 	int ret;
 
-	ret = hk_inline_hook(h, sym, wrap);
+	ret = droid_lkm_inline_hook_checked(h, sym, wrap);
 	if (ret) {
 		droid_lkm_misc_warn("hook %s failed: %d\n", sym, ret);
 		return ret;

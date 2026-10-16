@@ -29,6 +29,15 @@ static const struct droid_lkm_misc_xt_item droid_lkm_misc_xt_items[] = {
 
 static unsigned int droid_lkm_misc_xt_registered;
 
+/*
+ * which entries actually armed. the count above is what the report prints, but
+ * teardown has to walk the items, not the count: an item that failed its init
+ * is skipped and the one after it still arms, so indexing exit() by the count
+ * would call exit on an item that never ran init and never call it on the one
+ * that did. harmless with a single item, wrong the moment a second one lands
+ */
+static bool droid_lkm_misc_xt_started[ARRAY_SIZE(droid_lkm_misc_xt_items)];
+
 int droid_lkm_misc_xt_init(void)
 {
 	unsigned int i;
@@ -37,11 +46,17 @@ int droid_lkm_misc_xt_init(void)
 	for (i = 0; i < ARRAY_SIZE(droid_lkm_misc_xt_items); i++) {
 		ret = droid_lkm_misc_xt_items[i].init();
 		if (ret) {
-			droid_lkm_misc_err("xt %s failed: %d\n",
+			/*
+			 * one match that can not arm is that match, not the ko.
+			 * a target kernel missing its symbols drops it here and
+			 * the report below says unsupported, without taking the
+			 * rest of the module down with it
+			 */
+			droid_lkm_misc_warn("xt %s skipped: %d\n",
 				droid_lkm_misc_xt_items[i].name, ret);
-			droid_lkm_misc_xt_exit();
-			return ret;
+			continue;
 		}
+		droid_lkm_misc_xt_started[i] = true;
 		droid_lkm_misc_xt_registered++;
 		droid_lkm_misc_info("xt registered: %s\n",
 			droid_lkm_misc_xt_items[i].name);
@@ -57,9 +72,14 @@ int droid_lkm_misc_xt_init(void)
 
 void droid_lkm_misc_xt_exit(void)
 {
-	while (droid_lkm_misc_xt_registered) {
+	unsigned int i;
+
+	for (i = ARRAY_SIZE(droid_lkm_misc_xt_items); i-- > 0;) {
+		if (!droid_lkm_misc_xt_started[i])
+			continue;
+		droid_lkm_misc_xt_started[i] = false;
 		droid_lkm_misc_xt_registered--;
-		droid_lkm_misc_xt_items[droid_lkm_misc_xt_registered].exit();
+		droid_lkm_misc_xt_items[i].exit();
 	}
 }
 

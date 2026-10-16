@@ -11,6 +11,12 @@
 #include <linux/pid_namespace.h>
 #include <linux/pid.h>
 #include <linux/seq_file.h>
+/* the concrete types devtmpfs dereferences, see the field list in ds_ti.h */
+#include <linux/fs.h>
+#include <linux/dcache.h>
+#include <linux/mount.h>
+#include <linux/device.h>
+#include <linux/kobject.h>
 
 #include "ds.h"
 #include "ds_ti.h"
@@ -31,6 +37,15 @@ struct droid_lkm_field {
 };
 
 enum {
+	/*
+	 * zero, because zero is what a field the scan never reached still holds.
+	 * droid_lkm_layout_init() returns early when type info or BTF is missing,
+	 * so the state left behind on that path has to mean "not confirmed" and
+	 * never "ok": droid_lkm_layout_ok() answering true there would hand every
+	 * caller a live offset of zero into a struct nobody has checked, and the
+	 * guards that were written to refuse exactly that would all pass
+	 */
+	DROID_LKM_FIELD_UNSET = 0,
 	DROID_LKM_FIELD_OK,
 	DROID_LKM_FIELD_NO_TYPE,
 	DROID_LKM_FIELD_NO_MEMBER,
@@ -95,6 +110,21 @@ static struct droid_lkm_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_SYSCTLS, ipc_namespace, mq_sysctls)
 	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_IPC_SYSCTLS, ipc_namespace, ipc_sysctls)
 #endif
+	/* the fields devtmpfs reads on live vfs and driver core objects */
+	DROID_LKM_FIELD(DROID_LKM_F_VFSMOUNT_MNT_ROOT, vfsmount, mnt_root)
+	DROID_LKM_FIELD(DROID_LKM_F_VFSMOUNT_MNT_SB, vfsmount, mnt_sb)
+	DROID_LKM_FIELD(DROID_LKM_F_SUPER_S_ROOT, super_block, s_root)
+	DROID_LKM_FIELD(DROID_LKM_F_SUPER_S_ACTIVE, super_block, s_active)
+	DROID_LKM_FIELD(DROID_LKM_F_SUPER_S_UMOUNT, super_block, s_umount)
+	DROID_LKM_FIELD(DROID_LKM_F_DENTRY_D_INODE, dentry, d_inode)
+	DROID_LKM_FIELD(DROID_LKM_F_DENTRY_D_SB, dentry, d_sb)
+	DROID_LKM_FIELD(DROID_LKM_F_INODE_I_RWSEM, inode, i_rwsem)
+	DROID_LKM_FIELD(DROID_LKM_F_INODE_I_PRIVATE, inode, i_private)
+	DROID_LKM_FIELD(DROID_LKM_F_DEVICE_KOBJ, device, kobj)
+	DROID_LKM_FIELD(DROID_LKM_F_DEVICE_CLASS, device, class)
+	DROID_LKM_FIELD(DROID_LKM_F_DEVICE_DEVT, device, devt)
+	DROID_LKM_FIELD(DROID_LKM_F_KSET_LIST, kset, list)
+	DROID_LKM_FIELD(DROID_LKM_F_KSET_LIST_LOCK, kset, list_lock)
 };
 
 #define DROID_LKM_TYPE(_id, _type)                                            	[_id] = { .name = #_type, .build = sizeof(struct _type) },
@@ -215,6 +245,31 @@ void *droid_lkm_layout_ptr(void *base, enum droid_lkm_field_id id)
 	if (!base || !droid_lkm_layout_ok(id))
 		return NULL;
 	return (char *)base + droid_lkm_layout_off(id);
+}
+
+bool droid_lkm_layout_all_ok(const enum droid_lkm_field_id *ids, unsigned int n,
+			     const char **bad)
+{
+	unsigned int i;
+
+	if (bad)
+		*bad = NULL;
+
+	for (i = 0; i < n; i++) {
+		if (droid_lkm_layout_ok(ids[i]))
+			continue;
+
+		if (bad) {
+			if (ids[i] < ARRAY_SIZE(droid_lkm_fields))
+				*bad = droid_lkm_fields[ids[i]].member;
+			else
+				*bad = "?";
+		}
+
+		return false;
+	}
+
+	return true;
 }
 
 u32 droid_lkm_layout_type_size(enum droid_lkm_type_id id)

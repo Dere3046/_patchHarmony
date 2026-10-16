@@ -143,8 +143,6 @@ __nocfi noinline struct dentry *lookup_one_len(const char *name, struct dentry *
 {
 	if (droid_lkm_ks.lookup_one_len)
 		return droid_lkm_ks.lookup_one_len(name, base, len);
-	if (droid_lkm_ks.lookup_one_len)
-		return droid_lkm_ks.lookup_one_len(name, base, len);
 
 	{
 		static struct dentry *(*fn)(const struct qstr *, struct dentry *,

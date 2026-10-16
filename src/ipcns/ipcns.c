@@ -423,7 +423,12 @@ int droid_lkm_ipcns_init(void)
 		return -ENOMEM;
 	}
 
-	shm_init_ns(&init_ipc_ns);
+	/*
+	 * droid_lkm_ipc_util_init() above already ran msg_init()/sem_init()/
+	 * shm_init() over this same object, so all three of its id sets are
+	 * initialised. calling shm_init_ns() again would rhashtable_init() and
+	 * idr_init() the shm set a second time and leak the first pair of tables
+	 */
 
 	droid_lkm_ipcns_host = &init_ipc_ns;
 	
@@ -545,8 +550,15 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 		}
 
 		if (e == &droid_lkm_ipcns_init_entry || droid_lkm_ipcns_is_host(e->ns)) {
-			
-			if (!droid_lkm_ipcns_in_use(e->ns))
+			/*
+			 * the ids of a namespace the kernel made, the host included, are
+			 * the kernel's: its own free_ipc_ns() takes them down. doing it
+			 * here is rhashtable_destroy() and idr_destroy() over the running
+			 * kernel's tables, and the host ipc layer keeps using destroyed id
+			 * tables once this module is gone
+			 */
+			if (!droid_lkm_ipcns_kernel_owned &&
+			    !droid_lkm_ipcns_in_use(e->ns))
 				droid_lkm_ipcns_destroy_ids(e->ns);
 			continue;
 		}

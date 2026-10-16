@@ -3,62 +3,51 @@
  * Copyright (C) 2026 dere3046
  */
 
-#include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/init.h>
+#include <linux/module.h>
 
 #include "core.h"
-#include "hk.h"
+#include "ds.h"
+#include "ds_phase.h"
 #include "ghost.h"
 #ifdef CONFIG_DROID_LKM_SELFTEST
 #include "selftest.h"
 #endif
 
-static unsigned long __nocfi dlc_hk_resolve(const char *name)
-{
-	return kallrecon_klp ? kallrecon_klp(name) : 0;
-}
-
-static const struct hk_cfg dlc_hk_cfg = {
-	.resolve = dlc_hk_resolve,
-};
-
+/*
+ * this was droid_lkm_compat.ko, with a kallsyms base, a hook engine and an
+ * inline hook policy of its own. linked into droid_lkm.ko it has none of those:
+ * the base is recovered once by the main module, the engine is already up when
+ * this runs, and the one policy droid_lkm_hook_policy_apply() settled is the
+ * one the fixup rides, which is why there is no inline_hook parameter here any
+ * more -- two module_params can not share a name, and the main module owns it.
+ */
 bool dlc_inline_hooks_on;
-static bool dlc_inline_hook = true;
-module_param_named(inline_hook, dlc_inline_hook, bool, 0444);
-MODULE_PARM_DESC(inline_hook, "install inline hooks, on by default");
 
-static int __init droid_lkm_compat_init(void)
+static bool droid_lkm_compat_up;
+
+int droid_lkm_compat_phase_init(void)
 {
 	int ret;
 
-	find_kallsyms_base();
-	if (!klnum_val || !kallrecon_klp) {
-		pr_err("[droid_lkm_compat] kallsyms recovery failed\n");
-		return -ENODATA;
-	}
-
-	ret = hk_init(&dlc_hk_cfg);
-	if (ret) {
-		pr_err("[droid_lkm_compat] hk_init failed: %d\n", ret);
-		return ret;
-	}
-
-	/* the vendor fixup is the inline hook, so the policy travels with it */
-	dlc_inline_hooks_on = dlc_inline_hook;
+	dlc_inline_hooks_on = droid_lkm_inline_hooks_on;
 	pr_info("[droid_lkm_compat] hook policy: inline_hook=%d\n",
 		dlc_inline_hooks_on);
 
-	// the fixup is why this module exists
-	// a silent miss leaves vendor callers with NULL
+	/*
+	 * the fixup is why this half exists and a silent miss leaves vendor
+	 * callers with NULL, which is why it used to refuse to load. in this
+	 * module a refusal would take ipcns and the userns half down with a
+	 * vendor quirk, so it reports instead and the caller keeps the module
+	 */
 	ret = dlc_ghost_init();
 	if (ret) {
-		pr_err("[droid_lkm_compat] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
-		       ret);
-		hk_exit();
+		pr_warn("[droid_lkm_compat] the vendor fixup did not install (%d), those callers keep the kernel's NULL; ghost=0 turns the attempt off\n",
+			ret);
 		return ret;
 	}
 
+	droid_lkm_compat_up = true;
 #ifdef CONFIG_DROID_LKM_SELFTEST
 	dlc_selftest_init();
 #endif
@@ -66,18 +55,14 @@ static int __init droid_lkm_compat_init(void)
 	return 0;
 }
 
-static void __exit droid_lkm_compat_exit(void)
+void droid_lkm_compat_phase_exit(void)
 {
+	if (!droid_lkm_compat_up)
+		return;
+
+	droid_lkm_compat_up = false;
 #ifdef CONFIG_DROID_LKM_SELFTEST
 	dlc_selftest_exit();
 #endif
 	dlc_ghost_exit();
-	hk_exit();
 }
-
-module_init(droid_lkm_compat_init);
-module_exit(droid_lkm_compat_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("dere3046");
-MODULE_DESCRIPTION("OPPO vendor quirk fixups");

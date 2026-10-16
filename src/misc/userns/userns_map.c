@@ -137,8 +137,17 @@ void droid_lkm_userns_map_selftest(void)
 		    droid_lkm_userns_map_up(&probe, id) != id)
 			bad++;
 	}
-	if (droid_lkm_userns_map_down(&probe, 4294967295U) != 4294967295U ||
-	    droid_lkm_userns_map_up(&probe, 4294967295U) != 4294967295U)
+	/*
+	 * the identity map's single extent covers 0 .. 4294967295 - 1, so the top
+	 * of the range is not in it, and 4294967295 happens to be both the id and
+	 * the unmapped answer -- a round trip comparison cannot tell those two
+	 * apart, it passes whichever way the map behaves. ask whether the id is
+	 * covered instead, and round trip the last id the map does cover
+	 */
+	if (droid_lkm_userns_map_ok(&probe, 4294967295U))
+		bad++;
+	if (droid_lkm_userns_map_down(&probe, 4294967294U) != 4294967294U ||
+	    droid_lkm_userns_map_up(&probe, 4294967294U) != 4294967294U)
 		bad++;
 
 	if (bad)

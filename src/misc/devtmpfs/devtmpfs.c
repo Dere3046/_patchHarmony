@@ -10,7 +10,7 @@
  * of "devtmpfs" by anyone returns that same superblock, which is what makes it
  * one /dev for the whole system.
  *
- * Four things differ from upstream, all deliberate.
+ * Five things differ from upstream, all deliberate.
  *
  *   - Upstream mounts the result over /dev during boot. This module is loaded
  *     long after the platform's device manager has built /dev, and mounting over
@@ -34,6 +34,11 @@
  *     unloading, the same discipline as unmounting a filesystem before rmmod.
  *   - Upstream sees every device register from early boot. This walks the
  *     devices that already exist first, through devices_kset.
+ *   - Upstream populates before the device's SELinux policy has loaded, so its
+ *     devtmpfsd thread -- the kernel domain -- is free to mknod. This loads
+ *     minutes later, when the policy is in force and refuses that domain, which
+ *     is what leaves the tree empty. The worker borrows the authorized loader's
+ *     credentials instead, and no policy is changed to make room for it.
  *
  * devtmpfs_create_node() and devtmpfs_delete_node() are what device_add() and
  * device_del() call, and those two calls are compiled out with the same option,
@@ -44,6 +49,7 @@
 #include <linux/sched.h>
 #include <linux/cred.h>
 #include <linux/err.h>
+#include <linux/jiffies.h>
 #include <linux/fs.h>
 #include <linux/namei.h>
 #include <linux/path.h>
@@ -58,46 +64,72 @@
 #include <linux/mount.h>
 #include <uapi/linux/mount.h>
 #include <linux/stat.h>
+#include <linux/version.h>
+#include <linux/user_namespace.h>
 #include <linux/mnt_idmapping.h>
 
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
+#include "ds.h"
+#include "ds_caps.h"
+#include "ds_ti.h"
 #include "hk_inline.h"
 #include "devtmpfs.h"
 
+/*
+ * every entry below is a kernel function reached by name and called through
+ * this pointer, so each one has to be the kernel's own type. clang's cfi hashes
+ * the whole function type at the call, so a prototype that differs from the
+ * kernel's by one qualifier is a fatal cfi failure on the device rather than a
+ * warning. this file took a device down over a const on device_get_devnode's
+ * device argument, which is why the types are not written here at all.
+ *
+ * typeof(&symbol) is the declaration the build is already compiling against,
+ * which is the point of building inside the ddk: the same headers and the same
+ * clang as the kernel that will load this. the vfs family's first argument
+ * changed shape twice on the way here, absent until 5.11, a user namespace from
+ * 5.12, an id mapping from 6.3, and none of that has to be spelled out now. the
+ * value handed in at the call sites is droid_lkm_caps.idmap_none, which is
+ * nop_mnt_idmap or init_user_ns for the running kernel.
+ */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+/*
+ * device_get_devnode left <linux/device.h> for the driver core's own header in
+ * 6.3. the ddk tree is on the include path (the Makefile adds it), which is
+ * what keeps the field below the kernel's type instead of a second guess at it
+ */
+#include <drivers/base/base.h>
+#endif
+
 struct droid_lkm_devtmpfs_ksym {
-	struct vfsmount *(*vfs_kern_mount)(struct file_system_type *type, int flags,
-					   const char *name, void *data);
-	int (*register_filesystem)(struct file_system_type *fs);
-	int (*unregister_filesystem)(struct file_system_type *fs);
-	int (*reconfigure_single)(struct super_block *s, int flags, void *data);
-	void (*deactivate_locked_super)(struct super_block *s);
-	void (*kern_unmount)(struct vfsmount *mnt);
-	int (*shmem_init_fs_context)(struct fs_context *fc);
-	void (*kill_litter_super)(struct super_block *sb);
+	typeof(&vfs_kern_mount)		vfs_kern_mount;
+	typeof(&register_filesystem)	register_filesystem;
+	typeof(&unregister_filesystem)	unregister_filesystem;
+	typeof(&reconfigure_single)	reconfigure_single;
+	typeof(&deactivate_locked_super) deactivate_locked_super;
+	typeof(&kern_unmount)		kern_unmount;
+	typeof(&shmem_init_fs_context)	shmem_init_fs_context;
+	typeof(&kill_litter_super)	kill_litter_super;
 
-	struct dentry *(*lookup_one_len)(const char *name, struct dentry *base, int len);
+	typeof(&lookup_one_len)		lookup_one_len;
 	/* namespaced export (VFS_internal_...), so resolved rather than imported */
-	struct dentry *(*dget_parent)(struct dentry *dentry);
-	int (*vfs_mknod)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, umode_t mode, dev_t dev);
-	int (*vfs_mkdir)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, umode_t mode);
-	int (*notify_change)(struct mnt_idmap *idmap, struct dentry *dentry,
-			     struct iattr *attr, struct inode **delegated_inode);
-	int (*vfs_unlink)(struct mnt_idmap *idmap, struct inode *dir,
-			  struct dentry *dentry, struct inode **delegated_inode);
-	int (*vfs_rmdir)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry);
-	int (*vfs_getattr)(const struct path *path, struct kstat *stat,
-			   u32 request_mask, unsigned int query_flags);
+	typeof(&dget_parent)		dget_parent;
+	typeof(&vfs_mknod)		vfs_mknod;
+	typeof(&vfs_mkdir)		vfs_mkdir;
+	typeof(&notify_change)		notify_change;
+	typeof(&vfs_unlink)		vfs_unlink;
+	typeof(&vfs_rmdir)		vfs_rmdir;
+	typeof(&vfs_getattr)		vfs_getattr;
 
-	const char *(*device_get_devnode)(const struct device *dev, umode_t *mode,
-					  kuid_t *uid, kgid_t *gid, const char **tmp);
-	const struct class *block_class;
+	typeof(&device_get_devnode)	device_get_devnode;
+	/* the worker creates nodes as the loader, not as the kernel domain */
+	typeof(&get_task_cred)		get_task_cred;
+	typeof(&override_creds)		override_creds;
+	typeof(&revert_creds)		revert_creds;
+	const struct class		*block_class;
 	/* every device the driver core knows, walked once to fill the tree */
-	struct kset *devices_kset;
+	struct kset			*devices_kset;
 };
 
 static struct droid_lkm_devtmpfs_ksym droid_lkm_devtmpfs_ks;
@@ -106,6 +138,37 @@ static struct task_struct *droid_lkm_devtmpfs_thread;
 static struct vfsmount *droid_lkm_devtmpfs_mnt;
 static bool droid_lkm_devtmpfs_registered;
 static unsigned long droid_lkm_devtmpfs_nodes;
+
+/*
+ * the credentials the worker creates nodes under. a kernel thread runs as the
+ * kernel domain, and this device's policy does not let that domain mknod once
+ * the policy has loaded -- upstream devtmpfs never meets this because it
+ * populates /dev during boot, before there is a policy to refuse it. the
+ * authorized loader's credentials are ones the policy already allows, so the
+ * worker borrows them for the length of a request and nothing here changes a
+ * policy. the borrowing is why the walk produces nodes at all: without it every
+ * create and mkdir comes back denied, and the refusal is dontaudited away, so
+ * the only symptom is a tree that stays empty
+ */
+static const struct cred *droid_lkm_devtmpfs_node_cred;
+
+/* how many node failures have been named, so a walk of hundreds stays readable */
+static unsigned int droid_lkm_devtmpfs_fail_log;
+
+/*
+ * what a lock's state looks like from the outside, so the mount path can be read
+ * instead of argued about. struct rw_semaphore's count is its first member on
+ * every branch this module builds for, and s_active says which reference is left.
+ * the question this answers is whether the write lock the mount takes is given
+ * back, and by whom -- a count that stays off the unlocked value after up_write()
+ * names the call that is holding it
+ */
+static void droid_lkm_devtmpfs_lock_state(const char *where, struct super_block *s)
+{
+	droid_lkm_misc_dbg("devtmpfs: %s: s_umount.count=0x%lx s_active=%d\n", where,
+			   (unsigned long)atomic_long_read(&s->s_umount.count),
+			   atomic_read(&s->s_active));
+}
 
 static struct hk_inline droid_lkm_devtmpfs_add_hook;
 static struct hk_inline droid_lkm_devtmpfs_del_hook;
@@ -134,6 +197,15 @@ struct droid_lkm_devtmpfs_req {
 
 static struct droid_lkm_devtmpfs_req *droid_lkm_devtmpfs_requests;
 
+/*
+ * latched when a request went unanswered past the timeout. the thread handle is
+ * deliberately left alone: only the unload path owns kthread_stop(), and it
+ * decides on the pointer this field holds, so clearing it from a submit would
+ * strand the thread with nobody left able to stop it. this flag is what stops
+ * the driver core from queueing more work behind a stuck worker
+ */
+static bool droid_lkm_devtmpfs_worker_lost;
+
 /* mount setup against teardown, so a release cannot kill the superblock mid mount */
 static DEFINE_MUTEX(droid_lkm_devtmpfs_lock);
 
@@ -145,6 +217,17 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	struct dentry *root;
 	int err;
 
+	droid_lkm_misc_dbg("devtmpfs: mount enter: %s[%d] flags=0x%x data=%s\n",
+			   current->comm, current->pid, flags,
+			   data ? (const char *)data : "-");
+
+	/*
+	 * no guard on the node count here, on purpose. refusing to serve while the
+	 * walk has produced nothing was a stopgap for the wedge this file used to
+	 * cause on mount, and that wedge had a different cause which is fixed
+	 * below. an empty tree is still a working mount, and refusing it would only
+	 * hide the node creation problem rather than answer for it
+	 */
 	mutex_lock(&droid_lkm_devtmpfs_lock);
 
 	if (!droid_lkm_devtmpfs_mnt) {
@@ -155,15 +238,68 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	/* one instance for the whole system, the internal superblock */
 	s = droid_lkm_devtmpfs_mnt->mnt_sb;
 	atomic_inc(&s->s_active);
-	down_write(&s->s_umount);
+	/*
+	 * killable on purpose. an uninterruptible down_write leaves the mounting
+	 * task in D with SIGKILL unable to reach it, which is how a container whose
+	 * /dev is this filesystem became impossible to stop: the mount never
+	 * returned, systemd waited on it for good, and the only way out was a
+	 * reboot. an interrupted wait fails the mount with EINTR and leaves the
+	 * caller killable, which is the right answer for a lock that should not be
+	 * held in the first place. the shim falls back to down_write where the
+	 * kernel does not carry the killable variant
+	 */
+	if (down_write_killable(&s->s_umount)) {
+		droid_lkm_misc_warn("devtmpfs: mount interrupted waiting for s_umount, a previous holder never released it\n");
+		atomic_dec(&s->s_active);
+		mutex_unlock(&droid_lkm_devtmpfs_lock);
+		return ERR_PTR(-EINTR);
+	}
+	droid_lkm_devtmpfs_lock_state("locked", s);
+
 	err = droid_lkm_devtmpfs_ks.reconfigure_single(s, flags, data);
+	droid_lkm_misc_dbg("devtmpfs: reconfigure_single -> %d\n", err);
 	if (err < 0) {
-		droid_lkm_devtmpfs_ks.deactivate_locked_super(s);
+		/*
+		 * this path took a reference and the write lock, so it gives both
+		 * back: the reference by hand and the lock with up_write(). that is
+		 * what upstream's deactivate_locked_super() does here as well -- its
+		 * else branch is that same up_write(), and it does not reach the
+		 * kill_sb() branch because s_active was incremented above and this
+		 * only removes that increment (2 back to 1).
+		 *
+		 * an earlier revision of this comment claimed the opposite, that
+		 * s_active fell to zero and kill_litter_super tore this module's own
+		 * internal superblock down. it does not, and the node creation problem
+		 * that was blamed on it has a different cause.
+		 */
+		atomic_dec(&s->s_active);
+		up_write(&s->s_umount);
+		droid_lkm_devtmpfs_lock_state("released(err)", s);
 		mutex_unlock(&droid_lkm_devtmpfs_lock);
 		return ERR_PTR(err);
 	}
 
 	root = dget(s->s_root);
+	/*
+	 * the write lock stays held, and that is the contract this callback is
+	 * called under, not an oversight. fs/super.c's alloc_super() hands a new
+	 * superblock out with s_umount already write locked, so the vfs expects the
+	 * filesystem's get_tree to return with it still held and releases it
+	 * itself: fs/namespace.c's do_new_mount_fc() runs
+	 *
+	 *     up_write(&sb->s_umount);
+	 *
+	 * after vfs_get_tree() succeeds. upstream's public_dev_mount() returns
+	 * dget(s->s_root) the same way, holding the lock.
+	 *
+	 * a release here is therefore a *second* release of the same lock, and it
+	 * takes the count to -1, which reads as permanently held: every later
+	 * down_write() blocks, and so does every down_read() -- which includes
+	 * iterate_supers(), so every sync, and every mount of devtmpfs. that was
+	 * this file's wedge: a container whose /dev is this filesystem could not be
+	 * stopped because its own mount never returned. do not add an up_write here
+	 */
+	droid_lkm_devtmpfs_lock_state("lock left held for the vfs", s);
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
 
 	return root;
@@ -182,15 +318,44 @@ static struct file_system_type droid_lkm_devtmpfs_type = {
 	.mount		= droid_lkm_devtmpfs_public_mount,
 };
 
-static int droid_lkm_devtmpfs_submit(struct droid_lkm_devtmpfs_req *req,
-				     const char *tmp)
+static void droid_lkm_devtmpfs_drain(void);
+
+/*
+ * one worker thread answers every request, and it is a kernel thread: a fault inside
+ * a handler is answered by the panic guard with a task death, not a reboot, which
+ * leaves nothing able to complete the request its caller is waiting on. the caller is
+ * insmod, so the price of that used to be the whole shell in an uninterruptible wait
+ * with nothing said about why. the wait is bounded here and the request lives on the
+ * heap, so a worker that is only late still completes it without writing through a
+ * stack frame that no longer exists, and a worker that is gone costs this component
+ * instead of the caller.
+ */
+#define DROID_LKM_DEVTMPFS_REQ_TIMEOUT	(10 * HZ)
+
+static int droid_lkm_devtmpfs_submit(const char *name, umode_t mode, kuid_t uid,
+				     kgid_t gid, struct device *dev, const char *tmp)
 {
+	struct droid_lkm_devtmpfs_req *req;
+	int err;
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req) {
+		kfree(tmp);
+		return -ENOMEM;
+	}
+
+	req->name = name;
+	req->mode = mode;
+	req->uid = uid;
+	req->gid = gid;
+	req->dev = dev;
 	init_completion(&req->done);
 
 	spin_lock(&droid_lkm_devtmpfs_req_lock);
-	if (!droid_lkm_devtmpfs_thread) {
+	if (!droid_lkm_devtmpfs_thread || droid_lkm_devtmpfs_worker_lost) {
 		spin_unlock(&droid_lkm_devtmpfs_req_lock);
 		kfree(tmp);
+		kfree(req);
 		return -ENODEV;
 	}
 	req->next = droid_lkm_devtmpfs_requests;
@@ -198,57 +363,79 @@ static int droid_lkm_devtmpfs_submit(struct droid_lkm_devtmpfs_req *req,
 	spin_unlock(&droid_lkm_devtmpfs_req_lock);
 
 	wake_up_process(droid_lkm_devtmpfs_thread);
-	wait_for_completion(&req->done);
 
+	if (!wait_for_completion_timeout(&req->done, DROID_LKM_DEVTMPFS_REQ_TIMEOUT)) {
+		/* a worker that never answered will not answer the queued ones either */
+		droid_lkm_misc_err("devtmpfs: %s went unanswered, the worker is stalled\n", name);
+		droid_lkm_misc_report("devtmpfs", "unsupported", "worker stalled");
+		spin_lock(&droid_lkm_devtmpfs_req_lock);
+		droid_lkm_devtmpfs_worker_lost = true;
+		spin_unlock(&droid_lkm_devtmpfs_req_lock);
+		droid_lkm_devtmpfs_drain();
+		/*
+		 * both req and tmp are left behind on purpose: a worker that is only
+		 * late reads req->name to finish, and that name may be tmp
+		 */
+		return -ETIMEDOUT;
+	}
+
+	err = req->err;
 	kfree(tmp);
+	kfree(req);
 
-	return req->err;
+	return err;
 }
 
 static int droid_lkm_devtmpfs_create_node(struct device *dev)
 {
 	const char *tmp = NULL;
-	struct droid_lkm_devtmpfs_req req;
+	const char *name;
+	umode_t mode = 0;
+	kuid_t uid = GLOBAL_ROOT_UID;
+	kgid_t gid = GLOBAL_ROOT_GID;
+	int ret;
 
 	if (!droid_lkm_devtmpfs_thread)
 		return 0;
 
-	req.mode = 0;
-	req.uid = GLOBAL_ROOT_UID;
-	req.gid = GLOBAL_ROOT_GID;
-	req.name = droid_lkm_devtmpfs_ks.device_get_devnode(dev, &req.mode, &req.uid,
-							    &req.gid, &tmp);
-	if (!req.name)
+	name = droid_lkm_devtmpfs_ks.device_get_devnode(dev, &mode, &uid, &gid, &tmp);
+	if (!name)
 		return -ENOMEM;
 
-	if (req.mode == 0)
-		req.mode = 0600;
+	if (mode == 0)
+		mode = 0600;
 	if (droid_lkm_devtmpfs_is_blockdev(dev))
-		req.mode |= S_IFBLK;
+		mode |= S_IFBLK;
 	else
-		req.mode |= S_IFCHR;
+		mode |= S_IFCHR;
 
-	req.dev = dev;
+	ret = droid_lkm_devtmpfs_submit(name, mode, uid, gid, dev, tmp);
+	/*
+	 * the walk refuses silently otherwise, which is how a tree that ends up
+	 * with no nodes at all says nothing about why
+	 */
+	if (ret && droid_lkm_devtmpfs_fail_log < 8) {
+		droid_lkm_devtmpfs_fail_log++;
+		droid_lkm_misc_warn("devtmpfs: %s: create failed: %d\n", name, ret);
+	}
 
-	return droid_lkm_devtmpfs_submit(&req, tmp);
+	return ret;
 }
 
 static int droid_lkm_devtmpfs_delete_node(struct device *dev)
 {
 	const char *tmp = NULL;
-	struct droid_lkm_devtmpfs_req req;
+	const char *name;
 
 	if (!droid_lkm_devtmpfs_thread)
 		return 0;
 
-	req.name = droid_lkm_devtmpfs_ks.device_get_devnode(dev, NULL, NULL, NULL, &tmp);
-	if (!req.name)
+	name = droid_lkm_devtmpfs_ks.device_get_devnode(dev, NULL, NULL, NULL, &tmp);
+	if (!name)
 		return -ENOMEM;
 
-	req.mode = 0;
-	req.dev = dev;
-
-	return droid_lkm_devtmpfs_submit(&req, tmp);
+	/* mode 0 is what tells the worker this is a removal */
+	return droid_lkm_devtmpfs_submit(name, 0, GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, dev, tmp);
 }
 
 /* a request can still be queued after the unhook, so fail what is left */
@@ -278,9 +465,26 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 	int err = 0;
 
 	for (;;) {
-		const char *slash = strchr(s, '/');
-		int len = slash ? (int)(slash - s) : (int)strlen(s);
+		const char *slash;
+		int len;
 		struct dentry *next;
+
+		/*
+		 * this function and both of its callers lock a directory before walking
+		 * into it, and locking an inode that is not there is a fault inside the
+		 * rwsem whose log names the lock rather than the device it came from.
+		 * a parent without an inode is refused here so no caller ever sees one
+		 */
+		if (!d_inode(parent)) {
+			droid_lkm_misc_warn("devtmpfs: %s: %s has no inode\n", name,
+					    parent == droid_lkm_devtmpfs_mnt->mnt_root ?
+					    "the mount root" : "a walked directory");
+			err = -ENOTDIR;
+			break;
+		}
+
+		slash = strchr(s, '/');
+		len = slash ? (int)(slash - s) : (int)strlen(s);
 
 		if (!len) {
 			err = -EINVAL;
@@ -303,7 +507,7 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 		}
 
 		if (d_really_is_negative(next)) {
-			err = droid_lkm_devtmpfs_ks.vfs_mkdir(&nop_mnt_idmap,
+			err = droid_lkm_devtmpfs_ks.vfs_mkdir(droid_lkm_caps.idmap_none,
 							      d_inode(parent), next,
 							      0755);
 			if (!err)
@@ -312,12 +516,23 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 		}
 		inode_unlock(d_inode(parent));
 
-		dput(parent);
+		/*
+		 * the old parent's reference is dropped only once this step
+		 * succeeded and next is about to become the new parent. dropping it
+		 * before the error test released it twice -- once here, once in the
+		 * dput(parent) the loop leaves through -- so a vfs_mkdir that failed
+		 * part way down a name put a dentry this module still held a
+		 * reference to. dput() takes the count to zero, dentry_unlink_inode()
+		 * clears d_inode, and every later step then reports the mount root
+		 * itself as having no inode, which is what the device log showed for
+		 * every device name before the report went down inside dput()
+		 */
 		if (err) {
 			dput(next);
 			break;
 		}
 
+		dput(parent);
 		parent = next;
 		s = slash + 1;
 	}
@@ -345,24 +560,35 @@ static int droid_lkm_devtmpfs_handle_create(const char *nodename, umode_t mode,
 		goto out_unlock;
 	}
 
-	err = droid_lkm_devtmpfs_ks.vfs_mknod(&nop_mnt_idmap, d_inode(parent), dentry,
+	err = droid_lkm_devtmpfs_ks.vfs_mknod(droid_lkm_caps.idmap_none, d_inode(parent), dentry,
 					      mode, dev->devt);
 	if (!err) {
 		struct iattr newattrs;
 
-		newattrs.ia_mode = mode;
-		newattrs.ia_uid = uid;
-		newattrs.ia_gid = gid;
-		newattrs.ia_valid = ATTR_MODE | ATTR_UID | ATTR_GID;
-		/* notify_change wants the affected inode locked by its caller */
-		inode_lock(d_inode(dentry));
-		droid_lkm_devtmpfs_ks.notify_change(&nop_mnt_idmap, dentry, &newattrs,
-						    NULL);
-		inode_unlock(d_inode(dentry));
+		/*
+		 * vfs_mknod() instantiates the dentry, so this is not expected to be
+		 * negative; locking an inode that is not there is the fault this file
+		 * already took once, and the check costs nothing next to a down_write
+		 */
+		if (!d_inode(dentry)) {
+			droid_lkm_misc_warn("devtmpfs: %s: vfs_mknod left the dentry without an inode\n",
+					    nodename);
+			err = -EIO;
+		} else {
+			newattrs.ia_mode = mode;
+			newattrs.ia_uid = uid;
+			newattrs.ia_gid = gid;
+			newattrs.ia_valid = ATTR_MODE | ATTR_UID | ATTR_GID;
+			/* notify_change wants the affected inode locked by its caller */
+			inode_lock(d_inode(dentry));
+			droid_lkm_devtmpfs_ks.notify_change(droid_lkm_caps.idmap_none, dentry,
+							    &newattrs, NULL);
+			inode_unlock(d_inode(dentry));
 
-		/* mark as kernel-created inode */
-		d_inode(dentry)->i_private = &droid_lkm_devtmpfs_thread;
-		droid_lkm_devtmpfs_nodes++;
+			/* mark as kernel-created inode */
+			d_inode(dentry)->i_private = &droid_lkm_devtmpfs_thread;
+			droid_lkm_devtmpfs_nodes++;
+		}
 	}
 
 	dput(dentry);
@@ -387,8 +613,13 @@ static void droid_lkm_devtmpfs_prune(struct dentry *dir)
 			break;
 
 		up = droid_lkm_devtmpfs_ks.dget_parent(dir);
+		if (!d_inode(up)) {
+			/* a parent that is not a directory has nothing to remove from */
+			dput(up);
+			break;
+		}
 		inode_lock_nested(d_inode(up), I_MUTEX_PARENT);
-		err = droid_lkm_devtmpfs_ks.vfs_rmdir(&nop_mnt_idmap, d_inode(up), dir);
+		err = droid_lkm_devtmpfs_ks.vfs_rmdir(droid_lkm_caps.idmap_none, d_inode(up), dir);
 		inode_unlock(d_inode(up));
 
 		dput(dir);
@@ -459,11 +690,11 @@ static int droid_lkm_devtmpfs_handle_remove(const char *nodename, struct device 
 			newattrs.ia_mode = stat.mode & ~0777;
 			newattrs.ia_valid = ATTR_UID | ATTR_GID | ATTR_MODE;
 			inode_lock(d_inode(dentry));
-			droid_lkm_devtmpfs_ks.notify_change(&nop_mnt_idmap, dentry,
+			droid_lkm_devtmpfs_ks.notify_change(droid_lkm_caps.idmap_none, dentry,
 							    &newattrs, NULL);
 			inode_unlock(d_inode(dentry));
 
-			err = droid_lkm_devtmpfs_ks.vfs_unlink(&nop_mnt_idmap,
+			err = droid_lkm_devtmpfs_ks.vfs_unlink(droid_lkm_caps.idmap_none,
 							       d_inode(parent), dentry,
 							       NULL);
 			if (!err || err == -ENOENT) {
@@ -498,6 +729,16 @@ static int droid_lkm_devtmpfs_handle(const char *name, umode_t mode, kuid_t uid,
 
 static int droid_lkm_devtmpfs_thread_fn(void *p)
 {
+	const struct cred *old_cred;
+
+	/*
+	 * everything the loop below does is done under the loader's credentials,
+	 * see droid_lkm_devtmpfs_node_cred above: a kernel thread otherwise runs
+	 * as the kernel domain, which this device's policy does not let create
+	 * nodes
+	 */
+	old_cred = droid_lkm_devtmpfs_ks.override_creds(droid_lkm_devtmpfs_node_cred);
+
 	while (!kthread_should_stop()) {
 		spin_lock(&droid_lkm_devtmpfs_req_lock);
 		while (droid_lkm_devtmpfs_requests) {
@@ -521,6 +762,8 @@ static int droid_lkm_devtmpfs_thread_fn(void *p)
 		schedule();
 	}
 
+	droid_lkm_devtmpfs_ks.revert_creds(old_cred);
+
 	return 0;
 }
 
@@ -528,7 +771,7 @@ static int droid_lkm_devtmpfs_thread_fn(void *p)
 static void droid_lkm_devtmpfs_populate(void)
 {
 	struct kobject *kobj;
-	unsigned int count = 0, i = 0;
+	unsigned int count = 0, tried = 0, i = 0;
 	struct device **devs;
 
 	if (!droid_lkm_devtmpfs_ks.devices_kset)
@@ -557,10 +800,15 @@ static void droid_lkm_devtmpfs_populate(void)
 	spin_unlock(&droid_lkm_devtmpfs_ks.devices_kset->list_lock);
 
 	while (i--) {
-		if (MAJOR(devs[i]->devt))
+		if (MAJOR(devs[i]->devt)) {
+			tried++;
 			droid_lkm_devtmpfs_create_node(devs[i]);
+		}
 		put_device(devs[i]);
 	}
+
+	droid_lkm_misc_info("devtmpfs: walk: %u devices, %u with a devt, %lu nodes\n",
+			    count, tried, droid_lkm_devtmpfs_nodes);
 
 	kfree(devs);
 }
@@ -612,6 +860,9 @@ static int droid_lkm_devtmpfs_resolve(void)
 		{ "vfs_rmdir",		(void **)&droid_lkm_devtmpfs_ks.vfs_rmdir },
 		{ "vfs_getattr",	(void **)&droid_lkm_devtmpfs_ks.vfs_getattr },
 		{ "device_get_devnode",	(void **)&droid_lkm_devtmpfs_ks.device_get_devnode },
+		{ "get_task_cred",	(void **)&droid_lkm_devtmpfs_ks.get_task_cred },
+		{ "override_creds",	(void **)&droid_lkm_devtmpfs_ks.override_creds },
+		{ "revert_creds",	(void **)&droid_lkm_devtmpfs_ks.revert_creds },
 		{ "block_class",	(void **)&droid_lkm_devtmpfs_ks.block_class },
 	};
 	unsigned long devices_kset;
@@ -625,6 +876,21 @@ static int droid_lkm_devtmpfs_resolve(void)
 			return -ENOENT;
 		}
 	}
+
+	/*
+	 * what the resolver handed back for the mount machinery, printed next to a
+	 * symbol this file already depends on being right: device_get_devnode is the
+	 * control, the names it returns are real device names. an address here that
+	 * does not answer to /proc/kallsyms is a name the resolver took from a module
+	 * symbol table instead of the kernel's, which matters because a shim answers
+	 * a call without meaning to
+	 */
+	droid_lkm_misc_info("devtmpfs: vfs_kern_mount=0x%lx shmem_init_fs_context=0x%lx kill_litter_super=0x%lx lookup_one_len=0x%lx device_get_devnode=0x%lx\n",
+			    (unsigned long)droid_lkm_devtmpfs_ks.vfs_kern_mount,
+			    (unsigned long)droid_lkm_devtmpfs_ks.shmem_init_fs_context,
+			    (unsigned long)droid_lkm_devtmpfs_ks.kill_litter_super,
+			    (unsigned long)droid_lkm_devtmpfs_ks.lookup_one_len,
+			    (unsigned long)droid_lkm_devtmpfs_ks.device_get_devnode);
 
 	/* devices_kset is a pointer, the lookup returns its address, no kset means no walk */
 	devices_kset = droid_lkm_misc_sym("devices_kset");
@@ -640,11 +906,102 @@ static int droid_lkm_devtmpfs_resolve(void)
 	return 0;
 }
 
+/*
+ * the internal mount is the one object here that is read through fields this build
+ * cannot be sure of: struct vfsmount, dentry and inode are walked directly and the
+ * layout check only knows the namespace types. what the kernel handed back is
+ * printed once and then tested rather than trusted. a root that is missing, has no
+ * inode, or belongs to a superblock other than the mount's own means the tree the
+ * worker would walk does not exist, and a worker that finds that out inside
+ * down_write() costs the caller its shell instead of saying so.
+ */
+static int droid_lkm_devtmpfs_mount_check(void)
+{
+	struct vfsmount *mnt = droid_lkm_devtmpfs_mnt;
+	struct dentry *root = NULL;
+	struct super_block *sb = NULL;
+	unsigned long words[4] = { 0, 0, 0, 0 };
+	unsigned long root_inode = 0, root_sb = 0;
+
+	if (safe_read(&root, &mnt->mnt_root, sizeof(root)) ||
+	    safe_read(&sb, &mnt->mnt_sb, sizeof(sb)) ||
+	    safe_read(words, mnt, sizeof(words))) {
+		droid_lkm_misc_err("devtmpfs: the internal mount cannot be read\n");
+		return -ENODEV;
+	}
+
+	if (root) {
+		safe_read(&root_inode, &root->d_inode, sizeof(root_inode));
+		safe_read(&root_sb, &root->d_sb, sizeof(root_sb));
+	}
+
+	droid_lkm_misc_info("devtmpfs: mount=0x%lx words %lx %lx %lx %lx root=0x%lx inode=0x%lx sb=0x%lx root sb=0x%lx\n",
+			    (unsigned long)mnt, words[0], words[1], words[2], words[3],
+			    (unsigned long)root, root_inode, (unsigned long)sb, root_sb);
+
+	if (!root) {
+		droid_lkm_misc_err("devtmpfs: the internal mount has no root\n");
+		return -ENODEV;
+	}
+	if (!root_inode) {
+		droid_lkm_misc_err("devtmpfs: the internal mount's root has no inode\n");
+		return -ENODEV;
+	}
+	if (root_sb != (unsigned long)sb) {
+		droid_lkm_misc_err("devtmpfs: the root is not a child of the mount's superblock\n");
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+/*
+ * every field of a live kernel object this file dereferences. the rest of the
+ * tree reads namespaces through the layout table; this half reads struct
+ * dentry, inode, vfsmount, super_block, device and kset with the build's own
+ * field offsets, because the kernel's inline helpers -- d_inode(),
+ * d_really_is_negative(), inode_lock_nested() -- are written against the build
+ * headers and cannot be redirected. a build offset is only right when the
+ * running kernel places the field where the headers do, and one field off is
+ * d_inode() answering with something that is not an inode, or down_write()
+ * being handed an address that is not an rwsem: that is the fault that took the
+ * device down in droid_lkm_devtmpfs_parent(), and the check it added there read
+ * the same wrong offsets, so it could not catch it. the list is verified before
+ * the mount is built and before the walk runs, and a field the running kernel
+ * does not agree about turns the component off instead of leaving a walk that
+ * dereferences the wrong thing
+ */
+static const enum droid_lkm_field_id droid_lkm_devtmpfs_fields[] = {
+	DROID_LKM_F_VFSMOUNT_MNT_ROOT,
+	DROID_LKM_F_VFSMOUNT_MNT_SB,
+	DROID_LKM_F_SUPER_S_ROOT,
+	DROID_LKM_F_SUPER_S_ACTIVE,
+	DROID_LKM_F_SUPER_S_UMOUNT,
+	DROID_LKM_F_DENTRY_D_INODE,
+	DROID_LKM_F_DENTRY_D_SB,
+	DROID_LKM_F_INODE_I_RWSEM,
+	DROID_LKM_F_INODE_I_PRIVATE,
+	DROID_LKM_F_DEVICE_KOBJ,
+	DROID_LKM_F_DEVICE_CLASS,
+	DROID_LKM_F_DEVICE_DEVT,
+	DROID_LKM_F_KSET_LIST,
+	DROID_LKM_F_KSET_LIST_LOCK,
+};
+
 int droid_lkm_misc_devtmpfs_init(void)
 {
+	const char *bad = NULL;
 	char opts[] = "mode=0755";
 	char detail[64];
 	int err;
+
+	if (!droid_lkm_layout_all_ok(droid_lkm_devtmpfs_fields,
+				     ARRAY_SIZE(droid_lkm_devtmpfs_fields), &bad)) {
+		droid_lkm_misc_err("devtmpfs: the running kernel does not place %s where this build does, refusing to walk live structs\n",
+				   bad ? bad : "a struct field");
+		droid_lkm_misc_report("devtmpfs", "unsupported", "struct layout");
+		return -EOPNOTSUPP;
+	}
 
 	err = droid_lkm_devtmpfs_resolve();
 	if (err)
@@ -654,6 +1011,14 @@ int droid_lkm_misc_devtmpfs_init(void)
 		droid_lkm_devtmpfs_ks.shmem_init_fs_context;
 	droid_lkm_devtmpfs_internal_type.kill_sb = droid_lkm_devtmpfs_ks.kill_litter_super;
 
+	/*
+	 * flags 0, which is what upstream passes: drivers/base/devtmpfs.c makes
+	 * this object with vfs_kern_mount(&internal_fs_type, 0, "devtmpfs", opts),
+	 * not with kern_mount(). it was briefly changed to SB_KERNMOUNT here on the
+	 * theory that the flag was the difference from upstream, and a mount of the
+	 * public type then failed with -EINVAL; the source settles it, upstream
+	 * passes zero
+	 */
 	droid_lkm_devtmpfs_mnt = droid_lkm_devtmpfs_ks.vfs_kern_mount(
 		&droid_lkm_devtmpfs_internal_type, 0, "devtmpfs", opts);
 	if (IS_ERR(droid_lkm_devtmpfs_mnt)) {
@@ -664,6 +1029,12 @@ int droid_lkm_misc_devtmpfs_init(void)
 		return err;
 	}
 
+	err = droid_lkm_devtmpfs_mount_check();
+	if (err) {
+		droid_lkm_misc_report("devtmpfs", "unsupported", "internal mount");
+		goto out_unmount;
+	}
+
 	err = droid_lkm_devtmpfs_ks.register_filesystem(&droid_lkm_devtmpfs_type);
 	if (err) {
 		droid_lkm_misc_err("devtmpfs: register failed: %d\n", err);
@@ -672,6 +1043,19 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_registered = true;
 
+	/*
+	 * taken here because this is the last point that runs as the loader: the
+	 * thread created just below is a kernel thread from its first instruction,
+	 * and anything it did without these would be done as the kernel domain
+	 */
+	droid_lkm_devtmpfs_node_cred = droid_lkm_devtmpfs_ks.get_task_cred(current);
+	if (!droid_lkm_devtmpfs_node_cred) {
+		err = -ENOMEM;
+		droid_lkm_misc_err("devtmpfs: cannot take the loader's credentials\n");
+		droid_lkm_misc_report("devtmpfs", "unsupported", "credentials");
+		goto out_unregister;
+	}
+
 	droid_lkm_devtmpfs_thread = kthread_run(droid_lkm_devtmpfs_thread_fn, NULL,
 						"ddevtmpfs");
 	if (IS_ERR(droid_lkm_devtmpfs_thread)) {
@@ -679,11 +1063,11 @@ int droid_lkm_misc_devtmpfs_init(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		droid_lkm_misc_err("devtmpfs: no thread: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "no thread");
-		goto out_unregister;
+		goto out_creds;
 	}
 
-	err = hk_inline_hook(&droid_lkm_devtmpfs_add_hook, "device_add",
-			     "droid_lkm_devtmpfs_device_add");
+	err = droid_lkm_inline_hook_checked(&droid_lkm_devtmpfs_add_hook, "device_add",
+				    "droid_lkm_devtmpfs_device_add");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_add failed: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "device_add hook failed");
@@ -691,8 +1075,8 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_add_orig = (void *)droid_lkm_devtmpfs_add_hook.orig;
 
-	err = hk_inline_hook(&droid_lkm_devtmpfs_del_hook, "device_del",
-			     "droid_lkm_devtmpfs_device_del");
+	err = droid_lkm_inline_hook_checked(&droid_lkm_devtmpfs_del_hook, "device_del",
+				    "droid_lkm_devtmpfs_device_del");
 	if (err) {
 		droid_lkm_misc_warn("devtmpfs: hook device_del failed: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "device_del hook failed");
@@ -715,6 +1099,9 @@ out_unhook_add:
 out_stop:
 	kthread_stop(droid_lkm_devtmpfs_thread);
 	droid_lkm_devtmpfs_thread = NULL;
+out_creds:
+	put_cred(droid_lkm_devtmpfs_node_cred);
+	droid_lkm_devtmpfs_node_cred = NULL;
 out_unregister:
 	droid_lkm_devtmpfs_ks.unregister_filesystem(&droid_lkm_devtmpfs_type);
 	droid_lkm_devtmpfs_registered = false;
@@ -750,6 +1137,11 @@ int droid_lkm_misc_devtmpfs_release(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		kthread_stop(thread);
 		droid_lkm_devtmpfs_drain();
+	}
+
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
 	}
 
 	if (droid_lkm_devtmpfs_registered) {
@@ -792,6 +1184,11 @@ void droid_lkm_misc_devtmpfs_exit(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		kthread_stop(thread);
 		droid_lkm_devtmpfs_drain();
+	}
+
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
 	}
 
 	if (droid_lkm_devtmpfs_registered) {

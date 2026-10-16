@@ -125,7 +125,14 @@ int droid_lkm_userns_nsops_init(void)
 	}
 
 	droid_lkm_userns_host_ops->name = "user";
+	/*
+	 * 6.18 moved the namespace type out of proc_ns_operations and onto the
+	 * namespace itself, see droid_lkm_ns_set_ops() in core/ds.h; the whole
+	 * tree guards this member the same way
+	 */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	droid_lkm_userns_host_ops->type = CLONE_NEWUSER;
+#endif
 	droid_lkm_userns_host_ops->get = droid_lkm_userns_host_get;
 	droid_lkm_userns_host_ops->put = droid_lkm_userns_host_put;
 	droid_lkm_userns_host_ops->install = droid_lkm_userns_host_install;
@@ -134,7 +141,10 @@ int droid_lkm_userns_nsops_init(void)
 
 	ns->inum = PROC_USER_INIT_INO;
 	ns->ops = droid_lkm_userns_host_ops;
-	refcount_set(&ns->count, 1);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	ns->ns_type = CLONE_NEWUSER;
+#endif
+	refcount_set(droid_lkm_userns_ns_ref(ns), 1);
 	droid_lkm_userns_host_placeholder = ns;
 
 	if (!droid_lkm_misc_ks.ns_kind_register)
@@ -147,4 +157,14 @@ void droid_lkm_userns_nsops_exit(void)
 {
 	if (droid_lkm_misc_ks.ns_kind_unregister)
 		droid_lkm_misc_ks.ns_kind_unregister(&droid_lkm_userns_kind);
+
+	/*
+	 * droid_lkm_userns_host_ops and the placeholder namespace are deliberately
+	 * not freed here. the kind's ops_for() hands that table to a proc inode's
+	 * ns_ops, and the /proc/<pid>/ns lookup drops droid_lkm_ns_kinds_lock
+	 * before it instantiates the entry, so an unregister that freed the table
+	 * could race the instantiation that is already holding its address. both
+	 * are a few hundred bytes held for the module's lifetime, and this module
+	 * has no unload path to spend them at
+	 */
 }

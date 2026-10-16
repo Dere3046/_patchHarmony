@@ -74,6 +74,8 @@ static DEFINE_SPINLOCK(droid_lkm_zap_lock);
 static DECLARE_WAIT_QUEUE_HEAD(droid_lkm_zap_wq);
 
 static struct kprobe droid_lkm_kp_do_exit;
+/* only a probe that was actually armed may be unregistered */
+static bool droid_lkm_kp_do_exit_registered;
 
 static struct pid_namespace *to_pid_ns(struct ns_common *ns)
 {
@@ -695,6 +697,7 @@ int droid_lkm_pidns_init(void)
 		droid_lkm_pidns_cachep = NULL;
 		return -ENODATA;
 	}
+	droid_lkm_kp_do_exit_registered = true;
 
 out:
 	droid_lkm_info("pidns ready (reaper=%d)\n", droid_lkm_reaper_task->pid);
@@ -727,7 +730,15 @@ __nocfi noinline void droid_lkm_pidns_exit(void)
 	int i, leaked = 0;
 	bool caches_clean = true;
 
-	unregister_kprobe(&droid_lkm_kp_do_exit);
+	/*
+	 * skip_do_exit=1 and a refused registration both arrive here with a probe
+	 * that was never armed, and unregister_kprobe() on one of those is at best
+	 * a warning out of the kprobe core
+	 */
+	if (droid_lkm_kp_do_exit_registered) {
+		unregister_kprobe(&droid_lkm_kp_do_exit);
+		droid_lkm_kp_do_exit_registered = false;
+	}
 
 	droid_lkm_pidns_retire_reapers();
 

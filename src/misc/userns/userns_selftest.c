@@ -8,8 +8,16 @@
  * next to them, in userns_map.c. Layer two checks that nothing the module
  * promised reported itself refused. Layer three walks the path a container
  * takes, from a kernel thread: take a user namespace, take a uts namespace and
- * check that it is owned by it, take a mount namespace, and make the mount that
- * a namespace owned by the host cannot make.
+ * check that it is owned by it, take a mount namespace and check that it is
+ * owned by it too - which is the field may_mount() reads, and the one a
+ * namespace left owned by the host gets wrong.
+ *
+ * The mount itself is asked about rather than made, and that is not a
+ * simplification: path_mount() runs security_sb_mount() ahead of may_mount(), so
+ * a mount from kernel context is refused by the LSM before the capability is
+ * ever consulted. Attempting it would fail here for a reason that has nothing to
+ * do with the namespace, which is exactly the false alarm this test used to
+ * raise.
  *
  * Layer three is the one that matters, because it runs the same code a
  * container runs, on the device, before any container exists. A device where
@@ -27,9 +35,6 @@
 #include <linux/kthread.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
-#include <linux/path.h>
-#include <linux/namei.h>
-#include <linux/slab.h>
 #include <linux/utsname.h>
 #include <linux/nsproxy.h>
 #include <linux/mnt_namespace.h>
@@ -40,12 +45,6 @@
 #include "userns.h"
 
 static int (*droid_lkm_userns_selftest_unshare)(unsigned long flags);
-static int (*droid_lkm_userns_selftest_kern_path)(const char *name,
-		unsigned int flags, struct path *path);
-static int (*droid_lkm_userns_selftest_path_mount)(const char *dev_name,
-		struct path *path, const char *type, unsigned long flags,
-		void *data);
-static void (*droid_lkm_userns_selftest_path_put)(const struct path *path);
 
 static unsigned int droid_lkm_userns_selftest_failed;
 static struct completion droid_lkm_userns_selftest_done;
@@ -61,13 +60,11 @@ static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
 
 /*
  * the sample: a user namespace of this module's making, a uts namespace recording it as
- * owner, a mount namespace, and a tmpfs mounted in it
+ * owner, and a mount namespace that has to record it too
  */
 static int droid_lkm_userns_selftest_thread(void *unused)
 {
 	struct droid_lkm_userns *u;
-	struct path path;
-	char *data;
 	int ret;
 
 	if (droid_lkm_userns_of(current))
@@ -91,25 +88,16 @@ static int droid_lkm_userns_selftest_thread(void *unused)
 	if (ret)
 		goto out;
 
-	/* path_mount() writes the last byte of the data page, so this needs a page of its own */
-	data = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!data)
-		goto out;
-	strscpy(data, "size=1k", PAGE_SIZE);
-
-	ret = droid_lkm_userns_selftest_kern_path("/", LOOKUP_FOLLOW, &path);
-	if (ret) {
-		droid_lkm_userns_selftest_step("resolve /", 0, ret);
-		kfree(data);
-		goto out;
-	}
-
-	ret = droid_lkm_userns_selftest_path_mount("none", &path, "tmpfs", 0, data);
-	droid_lkm_userns_selftest_step("mount tmpfs in the namespace it owns",
-				       ret == 0, ret);
-
-	droid_lkm_userns_selftest_path_put(&path);
-	kfree(data);
+	/*
+	 * the field may_mount() reads, and the one this whole half turns on: a mount
+	 * namespace created while the task already carries the namespace comes out
+	 * owned by it, and one created before - which is what a single
+	 * unshare(CLONE_NEWUSER|CLONE_NEWNS) did while the credential was installed
+	 * afterwards - comes out owned by the host, and then no mount in it can ever
+	 * succeed
+	 */
+	droid_lkm_userns_selftest_step("the mount namespace is owned by it",
+		droid_lkm_userns_mntns_owner(current->nsproxy->mnt_ns) == &u->uns, 0);
 
 out:
 	complete(&droid_lkm_userns_selftest_done);
@@ -142,9 +130,6 @@ static int droid_lkm_userns_selftest_resolve(void)
 		void **slot;
 	} syms[] = {
 		{ "ksys_unshare",	(void **)&droid_lkm_userns_selftest_unshare },
-		{ "kern_path",		(void **)&droid_lkm_userns_selftest_kern_path },
-		{ "path_mount",		(void **)&droid_lkm_userns_selftest_path_mount },
-		{ "path_put",		(void **)&droid_lkm_userns_selftest_path_put },
 	};
 	unsigned int i;
 

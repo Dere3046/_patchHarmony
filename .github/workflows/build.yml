@@ -15,6 +15,10 @@ on:
 jobs:
   build-matrix:
     strategy:
+      # one KMI failing must not cancel the rest: the first round of this
+      # matrix reported one real failure and five cancels, which reads as
+      # five builds that were never tried
+      fail-fast: false
       matrix:
         kmi:
           - android13-5.10
@@ -37,22 +41,91 @@ jobs:
           git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
           scripts/fetch-deps.sh
 
+      # what the ddk actually put on disk for this KMI. the types in devtmpfs.c and
+      # misc_ksym.h are taken from these headers with typeof(&symbol), so the two
+      # lines that decide whether that works, and where the symbol version table
+      # lives for the CRC check at the end, are printed here in the same run that
+      # builds. every command ends in || true: a grep that finds nothing is an
+      # answer, not a reason to kill the job
+      - name: DDK facts
+        run: |
+          S=$(readlink -f "$KDIR/source" 2>/dev/null); S=${S:-$KDIR/source}
+          echo "KMI=${{ matrix.kmi }}"
+          echo "KDIR=$KDIR"
+          echo "SRC=$S"
+          echo "--- kdir ---"; ls -l "$KDIR" 2>/dev/null || true
+          echo "--- kdir/include ---"; ls -l "$KDIR/include" 2>/dev/null || true
+          echo "--- source ---"; ls -l "$KDIR/source" 2>/dev/null | head -15 || true
+          echo "--- device_get_devnode, whole tree ---"
+          grep -rn "device_get_devnode" "$S/drivers/base/base.h" "$S/include/linux/device.h" 2>/dev/null || true
+          echo "--- where does proc_alloc_inum live ---"
+          grep -rn "proc_alloc_inum" "$S/include" "$S/fs" 2>/dev/null || true
+          echo "--- create_new_namespaces, headers only ---"
+          grep -rn --include=*.h "create_new_namespaces" "$S/include" "$S/kernel" 2>/dev/null || echo "(no header declares it)"
+          echo "--- every other symbol misc_ksym.h leans on, with the file ---"
+          for s in xt_register_matches inet_dev_addr_type ipv6_chk_addr __ipv6_addr_type prepare_creds commit_creds key_put; do
+            echo "== $s"
+            grep -rn -E "[^a-zA-Z_]$s\(" "$S/include" "$S/net" 2>/dev/null | head -2 || true
+          done
+          echo "--- Module.symvers ---"
+          ls -l "$KDIR/Module.symvers" 2>/dev/null && wc -l < "$KDIR/Module.symvers" || echo "absent"
+          echo "--- vmlinux (informational) ---"
+          ls -l "$KDIR/vmlinux" 2>/dev/null || true
+
+      # -k so one run names every symbol that is not in scope, not just the first
+      # object that happens to be compiled
       - name: Build ${{ matrix.kmi }}
         run: |
-          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          make VER=${{ matrix.kmi }} -k > build.log 2>&1 || true
           tail -5 build.log
+          if grep -nE "error:" build.log; then
+            echo "build failed"
+            exit 1
+          fi
 
+      # case insensitive, and it covers modpost's ERROR:/WARNING: too. the lowercase
+      # form this used to match let every "undefined!" and every version mismatch
+      # through, which is the one class of failure that only shows up on the device
       - name: Zero warning gate
         run: |
-          if grep -nE "error:|warning:" build.log; then
+          if grep -niE "error:|warning:" build.log; then
             echo "build log is not clean"
             exit 1
           fi
 
+      # what the artifact carries, and the one check modpost cannot make for us:
+      # every symbol the module imports has to be in the kernel's export list, or
+      # insmod answers Unknown symbol. the crc records are reported rather than
+      # compared because this module gets them from the same Module.symvers modpost
+      # already read, so a comparison against it would only restate that read
+      - name: Module ABI check
+        run: |
+          KO=out/${{ matrix.kmi }}/droid_lkm.ko
+          echo "vermagic: $(modinfo -F vermagic "$KO" 2>/dev/null)"
+          ver=$(readelf -S -W "$KO" 2>/dev/null | awk '/__versions/{print $6}')
+          echo "__versions size: ${ver:-0} bytes"
+          if ! command -v nm >/dev/null 2>&1; then
+            echo "no nm in this image, skipping the export list check"
+            exit 0
+          fi
+          nm -u "$KO" | awk '{print $2}' | grep -v '^__crc_' | LC_ALL=C sort -u > mod-undef.txt
+          echo "symbols the module imports: $(wc -l < mod-undef.txt)"
+          if [ ! -s "$KDIR/Module.symvers" ]; then
+            echo "the ddk carries no Module.symvers, so there is no export list to check against"
+            exit 0
+          fi
+          awk '{print $2}' "$KDIR/Module.symvers" | LC_ALL=C sort -u > kern-syms.txt
+          echo "symbols this kernel exports: $(wc -l < kern-syms.txt)"
+          missing=$(comm -23 mod-undef.txt kern-syms.txt)
+          if [ -n "$missing" ]; then
+            echo "NOT exported by this kernel, insmod would refuse the module:"
+            echo "$missing"
+            exit 1
+          fi
+          echo "every imported symbol is exported by this kernel"
+
       - uses: actions/upload-artifact@v4
         with:
           name: droid_lkm-${{ matrix.kmi }}
-          path: |
-            out/${{ matrix.kmi }}/droid_lkm.ko
-            out/${{ matrix.kmi }}/droid_lkm_compat.ko
+          path: out/${{ matrix.kmi }}/droid_lkm.ko
           if-no-files-found: warn

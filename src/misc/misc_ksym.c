@@ -24,19 +24,34 @@ static unsigned long __nocfi droid_lkm_misc_resolve(const char *name)
 		}                                                                     \
 	} while (0)
 
+/*
+ * the same resolve without the load veto. a symbol one optional feature needs
+ * must not take the whole ko down: the header promises a missing thunk
+ * "disables the feature that needs it and never becomes an unresolved import",
+ * and on the GKI branches this ships on the first one to go is nop_mnt_idmap,
+ * which older kernels simply do not carry
+ */
+#define DROID_LKM_MISC_THUNK_OPT(_field, _name, _type)                                \
+	do {                                                                          \
+		droid_lkm_misc_ks._field = (_type)droid_lkm_misc_resolve(_name);       \
+		if (!droid_lkm_misc_ks._field)                                        \
+			droid_lkm_misc_warn("optional thunk missing: %s\n", _name);    \
+	} while (0)
+
 int droid_lkm_misc_ksym_init(void)
 {
-	DROID_LKM_MISC_THUNK(xt_register_matches, "xt_register_matches",
+	/* xt matches and targets, and with them addrtype */
+	DROID_LKM_MISC_THUNK_OPT(xt_register_matches, "xt_register_matches",
 		typeof(droid_lkm_misc_ks.xt_register_matches));
-	DROID_LKM_MISC_THUNK(xt_unregister_matches, "xt_unregister_matches",
+	DROID_LKM_MISC_THUNK_OPT(xt_unregister_matches, "xt_unregister_matches",
 		typeof(droid_lkm_misc_ks.xt_unregister_matches));
-	DROID_LKM_MISC_THUNK(inet_dev_addr_type, "inet_dev_addr_type",
+	DROID_LKM_MISC_THUNK_OPT(inet_dev_addr_type, "inet_dev_addr_type",
 		typeof(droid_lkm_misc_ks.inet_dev_addr_type));
-	DROID_LKM_MISC_THUNK(ipv6_chk_addr, "ipv6_chk_addr",
+	DROID_LKM_MISC_THUNK_OPT(ipv6_chk_addr, "ipv6_chk_addr",
 		typeof(droid_lkm_misc_ks.ipv6_chk_addr));
-	DROID_LKM_MISC_THUNK(__ipv6_addr_type, "__ipv6_addr_type",
+	DROID_LKM_MISC_THUNK_OPT(__ipv6_addr_type, "__ipv6_addr_type",
 		typeof(droid_lkm_misc_ks.__ipv6_addr_type));
-	DROID_LKM_MISC_THUNK(__nf_ip6_route, "__nf_ip6_route",
+	DROID_LKM_MISC_THUNK_OPT(__nf_ip6_route, "__nf_ip6_route",
 		typeof(droid_lkm_misc_ks.__nf_ip6_route));
 
 	DROID_LKM_MISC_THUNK(proc_alloc_inum, "proc_alloc_inum",
@@ -58,12 +73,16 @@ int droid_lkm_misc_ksym_init(void)
 		droid_lkm_misc_thunk_missing = true;
 	}
 
+	/*
+	 * the "no idmap" sentinel, pointer compared when a proc mount is set up
+	 * under a container user namespace. kernels before the idmapped mount
+	 * work have no such symbol at all, and mount idmapping is the one userns
+	 * path that degrades without it, so this is a warning and not a veto
+	 */
 	droid_lkm_misc_ks.nop_mnt_idmap = (typeof(droid_lkm_misc_ks.nop_mnt_idmap))
 		droid_lkm_misc_resolve("nop_mnt_idmap");
-	if (!droid_lkm_misc_ks.nop_mnt_idmap) {
-		droid_lkm_misc_warn("thunk missing: nop_mnt_idmap\n");
-		droid_lkm_misc_thunk_missing = true;
-	}
+	if (!droid_lkm_misc_ks.nop_mnt_idmap)
+		droid_lkm_misc_warn("optional thunk missing: nop_mnt_idmap\n");
 
 	/* exported by droid_lkm.ko, absent only means the ns kind cannot be offered */
 	droid_lkm_misc_ks.ns_kind_register =

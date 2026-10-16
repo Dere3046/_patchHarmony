@@ -46,6 +46,7 @@
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
+#include "ds.h"
 #include "userns.h"
 #include "hk_inline.h"
 
@@ -97,8 +98,16 @@ static int droid_lkm_userns_mnt_ops_resolve(void)
 	if (!ops.name || safe_read(text, ops.name, 4) || memcmp(text, "mnt", 4))
 		return -EINVAL;
 
+	/*
+	 * 6.18 moved the type off proc_ns_operations and onto ns_common::ns_type,
+	 * where this table is not the thing that carries it. the name check above
+	 * is what pins the table on those kernels; on every version that still
+	 * has the member, keep the second answer
+	 */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 	if (ops.type != CLONE_NEWNS)
 		return -EINVAL;
+#endif
 
 	if (!ops.owner || !droid_lkm_userns_is_text((unsigned long)ops.owner))
 		return -EINVAL;
@@ -167,6 +176,20 @@ static int droid_lkm_userns_mnt_own(struct mnt_namespace *mnt_ns,
 	return -ENOTSUPP;
 }
 
+/*
+ * the owner of a mount namespace, through the accessor the kernel uses itself. struct
+ * mnt_namespace is private to fs/mount.h, so a caller that holds the pointer without being able
+ * to see inside it - the self test, which reads the same field may_mount() reads - comes
+ * through here
+ */
+struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns)
+{
+	if (!droid_lkm_userns_mnt_owner || !mnt_ns)
+		return NULL;
+
+	return droid_lkm_userns_mnt_owner((struct ns_common *)mnt_ns);
+}
+
 __nocfi noinline struct mnt_namespace *
 droid_lkm_userns_copymntns_wrap(unsigned long flags, struct mnt_namespace *ns,
 				struct user_namespace *user_ns,
@@ -183,8 +206,14 @@ droid_lkm_userns_copymntns_wrap(unsigned long flags, struct mnt_namespace *ns,
 		return new_ns;
 
 	/* user_ns is the owner the kernel was handed, ours only for our own */
-	if (!droid_lkm_userns_is_ours(user_ns))
+	if (!droid_lkm_userns_is_ours(user_ns)) {
+		/*
+		 * silent here meant "mount namespace kept the host as owner, mounts in it will
+		 * fail" never showed up when the wrap bailed instead of failing to write.
+		 */
+		droid_lkm_misc_info("copy_mnt_ns: handed owner is not ours, namespace left as is\n");
 		return new_ns;
+	}
 
 	if (droid_lkm_userns_mnt_own(new_ns, user_ns))
 		droid_lkm_misc_err("mount namespace kept the host as owner, mounts in it will fail\n");
@@ -210,7 +239,13 @@ droid_lkm_userns_fsctx_wrap(struct file_system_type *type, unsigned int sb_flags
 	u = IS_ERR(fc) ? NULL : droid_lkm_userns_of(current);
 	if (u && fc->user_ns != &u->uns) {
 		fc->user_ns = &u->uns;
-		droid_lkm_misc_dbg("fs_context for %s owned by the container\n", type->name);
+		/* info, not dbg: this line is the only proof the superblock got our owner */
+		droid_lkm_misc_info("fs_context for %s retargeted to the container\n",
+				    type->name);
+	} else if (!IS_ERR(fc)) {
+		droid_lkm_misc_info("fs_context for %s NOT retargeted (ours=%d, same=%d)\n",
+				    type->name, u != NULL,
+				    u && fc->user_ns == &u->uns);
 	}
 
 	return fc;
@@ -233,16 +268,16 @@ int droid_lkm_userns_owner_init(void)
 		return ret;
 	}
 
-	ret = hk_inline_hook(&droid_lkm_userns_copymntns_hook, "copy_mnt_ns",
-			     "droid_lkm_userns_copymntns_wrap");
+	ret = droid_lkm_inline_hook_checked(&droid_lkm_userns_copymntns_hook, "copy_mnt_ns",
+				    "droid_lkm_userns_copymntns_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("hook copy_mnt_ns failed: %d\n", ret);
 		return ret;
 	}
 	droid_lkm_userns_copymntns_orig = (void *)droid_lkm_userns_copymntns_hook.orig;
 
-	ret = hk_inline_hook(&droid_lkm_userns_fsctx_hook, "fs_context_for_mount",
-			     "droid_lkm_userns_fsctx_wrap");
+	ret = droid_lkm_inline_hook_checked(&droid_lkm_userns_fsctx_hook, "fs_context_for_mount",
+				    "droid_lkm_userns_fsctx_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("hook fs_context_for_mount failed: %d\n", ret);
 		hk_inline_unhook(&droid_lkm_userns_copymntns_hook);

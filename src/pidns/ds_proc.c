@@ -297,7 +297,15 @@ int droid_lkm_proc_init(void)
 		droid_lkm_orig_ns_lookup = NULL;
 		return -EBUSY;
 	}
-	droid_lkm_dbg("ns hook is permanent: module pinned (rmmod -> -EBUSY)\n");
+	/*
+	 * this pin is never given back on purpose. the lookup table it patched is
+	 * a global inode_operations that lives for the whole boot, and this module
+	 * is load once: there is no unload path left to restore it in, and a
+	 * restore that raced a lookup would be worse than the reference. the
+	 * reference is what makes that explicit instead of leaving rmmod to
+	 * succeed on a kernel whose ns lookup is still ours
+	 */
+	droid_lkm_info("ns hook is permanent, module pinned for the boot (rmmod -> -EBUSY)\n");
 
 	/*
 	 * ns_last_pid needs the sysctl helpers the ipc side resolves, and this
