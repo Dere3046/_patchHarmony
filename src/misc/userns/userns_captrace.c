@@ -62,12 +62,27 @@ __nocfi noinline int droid_lkm_userns_cap_wrap(const struct cred *cred,
 	if (ret && cred && cred->user_ns != droid_lkm_userns_init_uns &&
 	    !atomic_xchg(&droid_lkm_userns_cap_busy, 1)) {
 		char name[128] = "<unknown>";
+		/*
+		 * frame 0 is the lsm wrapper (security_capable), which names nothing useful.
+		 * one frame further is the function that actually asked, and that is the one
+		 * worth reading. it is only safe to walk there when the kernel was built with
+		 * frame pointers, so say so instead of guessing when it was not.
+		 */
+#ifdef CONFIG_FRAME_POINTER
+		unsigned long outer = (unsigned long)__builtin_return_address(1);
+		char oname[128] = "<unknown>";
+
+		sym_name_at(outer, oname, sizeof(oname));
+#else
+		unsigned long outer = 0;
+		const char *oname = "<no frame pointers>";
+#endif
 
 		sym_name_at(caller, name, sizeof(name));
-		droid_lkm_misc_info("cap denied: cap=%d targ=%s caller=%s @0x%lx\n",
+		droid_lkm_misc_info("cap denied: cap=%d targ=%s caller=%s @0x%lx by=%s @0x%lx\n",
 			cap,
 			targ_ns == droid_lkm_userns_init_uns ? "init" : "other",
-			name, caller);
+			name, caller, oname, outer);
 		atomic_set(&droid_lkm_userns_cap_busy, 0);
 	}
 
