@@ -192,8 +192,14 @@ droid_lkm_userns_copymntns_wrap(unsigned long flags, struct mnt_namespace *ns,
 		return new_ns;
 
 	/* user_ns is the owner the kernel was handed, ours only for our own */
-	if (!droid_lkm_userns_is_ours(user_ns))
+	if (!droid_lkm_userns_is_ours(user_ns)) {
+		/*
+		 * silent here meant "mount namespace kept the host as owner, mounts in it will
+		 * fail" never showed up when the wrap bailed instead of failing to write.
+		 */
+		droid_lkm_misc_info("copy_mnt_ns: handed owner is not ours, namespace left as is\n");
 		return new_ns;
+	}
 
 	if (droid_lkm_userns_mnt_own(new_ns, user_ns))
 		droid_lkm_misc_err("mount namespace kept the host as owner, mounts in it will fail\n");
@@ -219,7 +225,13 @@ droid_lkm_userns_fsctx_wrap(struct file_system_type *type, unsigned int sb_flags
 	u = IS_ERR(fc) ? NULL : droid_lkm_userns_of(current);
 	if (u && fc->user_ns != &u->uns) {
 		fc->user_ns = &u->uns;
-		droid_lkm_misc_dbg("fs_context for %s owned by the container\n", type->name);
+		/* info, not dbg: this line is the only proof the superblock got our owner */
+		droid_lkm_misc_info("fs_context for %s retargeted to the container\n",
+				    type->name);
+	} else if (!IS_ERR(fc)) {
+		droid_lkm_misc_info("fs_context for %s NOT retargeted (ours=%d, same=%d)\n",
+				    type->name, u != NULL,
+				    u && fc->user_ns == &u->uns);
 	}
 
 	return fc;
