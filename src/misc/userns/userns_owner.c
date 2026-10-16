@@ -176,6 +176,20 @@ static int droid_lkm_userns_mnt_own(struct mnt_namespace *mnt_ns,
 	return -ENOTSUPP;
 }
 
+/*
+ * the owner of a mount namespace, through the accessor the kernel uses itself. struct
+ * mnt_namespace is private to fs/mount.h, so a caller that holds the pointer without being able
+ * to see inside it - the self test, which reads the same field may_mount() reads - comes
+ * through here
+ */
+struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns)
+{
+	if (!droid_lkm_userns_mnt_owner || !mnt_ns)
+		return NULL;
+
+	return droid_lkm_userns_mnt_owner((struct ns_common *)mnt_ns);
+}
+
 __nocfi noinline struct mnt_namespace *
 droid_lkm_userns_copymntns_wrap(unsigned long flags, struct mnt_namespace *ns,
 				struct user_namespace *user_ns,

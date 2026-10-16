@@ -59,6 +59,10 @@ extern struct user_namespace *droid_lkm_userns_init_uns;
 int droid_lkm_userns_owner_init(void);
 void droid_lkm_userns_owner_exit(void);
 
+/* the owner of a mount namespace, for callers that hold the pointer but cannot see the type */
+struct mnt_namespace;
+struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns);
+
 extern bool droid_lkm_userns_captrace_on;
 int droid_lkm_userns_captrace_init(void);
 void droid_lkm_userns_captrace_exit(void);
