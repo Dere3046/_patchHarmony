@@ -157,6 +157,12 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 	}
 
 	/* the child has not run and copy_creds() built a fresh credential, so this is race free */
+	/*
+	 * both pointers: __task_cred() reads real_cred, so a task whose cred alone carries
+	 * the namespace stays invisible to droid_lkm_userns_of() - which is where ours=0
+	 * came from, and with it the whole mount path kept the host as owner.
+	 */
+	droid_lkm_userns_install_cred((struct cred *)p->real_cred, u);
 	droid_lkm_userns_install_cred((struct cred *)p->cred, u);
 
 	return 0;
