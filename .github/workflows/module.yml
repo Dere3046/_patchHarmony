@@ -1,0 +1,86 @@
+name: Module zip
+
+# builds the same kernels build.yml does, then packs them into one flashable
+# zip. separate from build.yml so a normal push only runs one matrix.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        kmi:
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260313
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch deps
+        run: scripts/fetch-deps.sh
+
+      - name: Build ${{ matrix.kmi }}
+        run: |
+          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          tail -5 build.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: droid_lkm-${{ matrix.kmi }}
+          path: |
+            out/${{ matrix.kmi }}/droid_lkm.ko
+            out/${{ matrix.kmi }}/droid_lkm_compat.ko
+          if-no-files-found: error
+
+  package:
+    needs: build
+    # a kernel that fails to build should not cost the whole zip
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+
+      - name: Collect ko
+        run: |
+          mkdir -p out
+          for d in art/*/; do
+            k=${d%/}; k=${k##*/droid_lkm-}
+            [ -f "$d/droid_lkm.ko" ] || { echo "skip $k: no droid_lkm.ko"; continue; }
+            mkdir -p "out/$k"
+            cp "$d"/*.ko "out/$k/"
+            echo "$k: $(ls "out/$k" | tr '\n' ' ')"
+          done
+
+      - name: Package
+        run: |
+          chmod +x scripts/*.sh
+          sh scripts/package-module.sh
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phDroid-module
+          path: dist/*.zip
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
