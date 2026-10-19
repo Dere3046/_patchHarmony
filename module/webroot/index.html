@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>phDroid</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --line:#262b35; --fg:#e8ecf2; --dim:#96a0b5;
+    --accent:#5b8cff; --ok:#3ddc97; --bad:#ff6b6b; --warn:#ffb020;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f4f6fa; --card:#ffffff; --line:#e3e8f0; --fg:#151a22; --dim:#5d6a80;
+           --accent:#2f6bed; --ok:#0f9d63; --bad:#d93a3a; --warn:#b46b00; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.5 "SF Pro Text",Roboto,"PingFang SC","Noto Sans CJK SC",sans-serif;
+    padding:calc(18px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));}
+  h1{font-size:19px;margin:0 0 2px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:12.5px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:12px}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0}
+  .row+.row{border-top:1px solid var(--line)}
+  .k{color:var(--dim);font-size:13.5px;flex:0 0 auto}
+  .v{font-variant-numeric:tabular-nums;font-size:13.5px;text-align:right;word-break:break-all}
+  .badge{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+  .badge.on{color:var(--ok);border-color:var(--ok)}
+  .badge.off{color:var(--bad);border-color:var(--bad)}
+  .badge.warn{color:var(--warn);border-color:var(--warn)}
+  .actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:14px 0}
+  button{appearance:none;border:1px solid var(--line);background:var(--card);color:var(--fg);
+         border-radius:11px;padding:11px 8px;font-size:13.5px;font-weight:500}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.45}
+  button:active{opacity:.72}
+  h2{font-size:12px;color:var(--dim);font-weight:600;letter-spacing:.4px;margin:18px 0 8px;text-transform:uppercase}
+  .params{font:12px/1.7 ui-monospace,Menlo,Consolas,monospace;color:var(--dim);white-space:pre-wrap;word-break:break-all}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:0;
+      font:12px/1.55 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;
+      color:var(--fg);max-height:52vh;overflow:auto}
+</style>
+</head>
+<body>
+  <h1>phDroid</h1>
+  <div class="sub" id="sub">droid_lkm · KallRecon + HooKern + Type_info</div>
+
+  <div class="card">
+    <div class="row"><span class="k">droid_lkm</span><span id="state" class="badge">读取中</span></div>
+    <div class="row"><span class="k">内核</span><span id="kernel" class="v">–</span></div>
+    <div class="row"><span class="k">构建 KMI</span><span id="kmi" class="v">–</span></div>
+    <div class="row"><span class="k">设备</span><span id="device" class="v">–</span></div>
+    <div class="row"><span class="k">一加 / OPPO</span><span id="oplus" class="badge">–</span></div>
+    <div class="row"><span class="k">兼容模块</span><span id="compat" class="badge">–</span></div>
+    <div class="row"><span class="k">加载阻断</span><span id="blocked" class="badge">–</span></div>
+  </div>
+
+  <div class="actions">
+    <button id="btn-refresh">刷新</button>
+    <button id="btn-load" class="primary">重试加载</button>
+    <button id="btn-log">清空日志</button>
+  </div>
+
+  <h2>参数</h2>
+  <div class="card params" id="params">–</div>
+
+  <h2>日志</h2>
+  <pre id="log">正在读取…</pre>
+
+<script src="main.js"></script>
+</body>
+</html>
