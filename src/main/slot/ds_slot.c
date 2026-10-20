@@ -531,7 +531,14 @@ static void droid_lkm_nsproxy_drop(struct ipc_namespace *ipc)
 
 static bool droid_lkm_nsproxy_last(struct nsproxy *nsp)
 {
-	return nsp && refcount_read(&nsp->count) == 1;
+	if (!nsp)
+		return false;
+	/* nsproxy carries a refcount_t from 6.6, an atomic_t before that */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+	return refcount_read(&nsp->count) == 1;
+#else
+	return atomic_read(&nsp->count) == 1;
+#endif
 }
 
 static void droid_lkm_nsproxy_switch_run(struct task_struct *p,
