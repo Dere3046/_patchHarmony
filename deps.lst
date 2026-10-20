@@ -1,5 +1,6 @@
 # <name> <rev>
-KallRecon 138799c
-Type_info 178ece8
-KernCall 6b94207
-HooKern 2127321
+KallRecon b258fb6
+Type_info 7182dae
+KernCall cdec722
+HooKern 7a02afa
+vendorcompat -

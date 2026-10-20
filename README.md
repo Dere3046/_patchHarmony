@@ -1,131 +1,32 @@
 # droid_lkm
 
-out of tree kernel modules that give a stock GKI 6.12 kernel the namespace and
-IPC features container runtimes expect. android16-6.12 ships with
-CONFIG_SYSVIPC, CONFIG_POSIX_MQUEUE, CONFIG_PID_NS and CONFIG_IPC_NS turned
-off, so a container tool like Droidspaces cannot start anything at all. this
-project supplies those features from loadable modules, without recompiling the
-kernel and without moving a single struct member, so prebuilt vendor modules
-keep working.
+Out-of-tree kernel modules that provide missing namespace and IPC features
+(`CONFIG_SYSVIPC`, `CONFIG_POSIX_MQUEUE`, `CONFIG_PID_NS`, `CONFIG_IPC_NS`)
+for stock GKI kernels. It enables container runtimes like Droidspaces without
+kernel recompilation or struct layout modifications, preserving vendor module
+compatibility.
 
-this repository is the `Kern/` submodule of the Droidspaces fork, published as
-`git@github.com:Dere3046/_patchHarmony.git`.
+## Support Matrix
 
-three modules are built:
+| Kernel Version | Android Version | Target |
+| :--- | :--- | :--- |
+| **5.10** | Android 13 | `android13-5.10` |
+| **5.15** | Android 13 | `android13-5.15` |
+| **5.15** | Android 14 | `android14-5.15` |
+| **6.1** | Android 14 | `android14-6.1` |
+| **6.6** | Android 15 | `android15-6.6` |
+| **6.12** | Android 16 | `android16-6.12` |
+| **6.18** | Android 17 | `android17-6.18` |
 
-- `droid_lkm.ko` namespace and IPC support
-- `droid_lkm_compat.ko` vendor module quick fixups
-- `droid_lkm_misc.ko` the features this device kernel has compiled out that a
-  container still expects: runtime registered xt matches, a user namespace that
-  can be unshared, the per task id map files, and the control plane below
+## Credits
 
-## what it provides
+- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) by ravindu644 — target container runtime
+- [KMSDK](https://github.com/Dere3046/KMSDK) — SDK for library fetching and vendoring
+- [KallRecon](https://github.com/Dere3046/KallRecon) — runtime kernel symbol resolution
+- [Type_info](https://github.com/Dere3046/Type_info) — runtime struct layout reconstruction
+- [KernCall](https://github.com/Dere3046/KernCall) — syscall table patching
+- [HooKern](https://github.com/Dere3046/HooKern) — inline hook and kprobe engine
 
-- fake pid and ipc namespaces: `unshare`, `clone`, `clone3` and `setns` for
-  CLONE_NEWPID and CLONE_NEWIPC, with per namespace lifetime handling
-- ported SysV IPC: the msg, sem and shm syscalls plus their per namespace
-  sysctls
-- ported POSIX mqueue: six mq syscalls, mqueuefs and its per namespace sysctls
-- `/proc/<pid>/ns/pid` and `/proc/<pid>/ns/ipc`, entries a kernel with those
-  namespaces compiled out never creates
-- `NSpid`, `NStgid`, `NSpgid` and `NSsid` lines in `/proc/<pid>/status`
-- vendor quick fixups in the second module: a ghost task handed out when a
-  vendor module asks `find_task_by_vpid` for a pid that only exists inside a
-  container namespace, and a bounded pid value on that task for vendor code
-  that indexes arrays by `p->pid`
-- the third module's surface: `/proc/<pid>/{uid_map,gid_map,setgroups}` and
-  `/proc/droid_lkm_misc/{status,version}`, so a userspace can ask what is
-  installed instead of probing for behaviour it may not get
-
-## requirements
-
-- ARM64 device running GKI 6.12
-- a way to load out of tree modules, for example a root solution or KernelPatch
-- Docker, for the DDK build container
-- the library set pinned in `deps.lst`, fetched by the LKM SDK
-
-## build
-
-	scripts/fetch-deps.sh
-	scripts/build-ddkk.sh android16-6.12
-
-`fetch-deps.sh` clones the SDK at the revision in `.sdk-version` and vendors
-every library listed in `deps.lst` below `deps/`. `build-ddkk.sh <target>` runs
-the DDK container and writes both modules plus their build tree into
-`out/<target>/`. library sources are never committed here, `deps.lst` pins the
-exact revision of each one.
-
-`android15-6.6` is a supported target as well, same modules and features.
-
-## usage
-
-	insmod droid_lkm.ko
-	insmod droid_lkm_compat.ko
-	insmod droid_lkm_misc.ko
-
-load `droid_lkm.ko` before any container starts, then `droid_lkm_compat.ko` for
-the vendor fixups, then `droid_lkm_misc.ko`. the third resolves the one entry
-point it wants from the first by name at load time, so it also works alone.
-every module resolves its kernel symbols at load time and reports anything it
-cannot find; a missing core symbol aborts the load instead of leaving a half
-installed hook behind.
-
-module parameters cover the usual cases: `mqueue`, `gate`, `verbose`,
-`skip_sysvipc` and `no_fake_ns` on the first module, `skip_do_exit` on its pid
-namespace part, `ghost` and `ghost_match` on the second, `xt`, `userns` and
-`captrace` and `devtmpfs` on the third, plus a write only `release` described
-below. each one is documented in its own `MODULE_PARM_DESC`.
-`ghost_match` selects vendor modules by name prefix and defaults to `oplus_`,
-`*` matches every caller. `captrace` logs every capability decision the kernel
-refuses to a container task, with the function that asked for it.
-
-## vendor compatibility
-
-`droid_lkm.ko` is vendor neutral, everything it provides comes from the kernel
-side and behaves the same on any device.
-
-`droid_lkm_compat.ko` exists for OPPO and OnePlus kernels only. their vendor
-modules call `find_task_by_vpid` and use the returned task without checking it,
-and they index per pid arrays with `p->pid`. a pid that only exists inside a
-container namespace breaks both assumptions, which ends in a null dereference or
-an out of bounds access. the module answers those callers with a substitute task
-that carries a bounded pid, selected by module name prefix (`oplus_` by default,
-`*` matches every caller).
-
-Xiaomi devices do not install this module: MIUI and HyperOS vendor modules do not
-rely on that pattern, so the compat half is not needed there.
-
-## known limits
-
-- the user namespace is at its first level: unshare and clone produce one, the
-  credential, the namespace owners and the id map files are right, but the map is
-  the identity map, so a write that asks for anything else, and `setgroups` in a
-  container, are refused rather than half honoured
-- no idmapped mount lens, so a non identity mount cannot be permission checked
-- no cgroup pids or device controllers
-- no nftables match set, and only the addrtype xt match is ported so far
-- `NSpid` and its siblings are printed at the end of `/proc/<pid>/status`
-- devtmpfs' superblock holds a reference to the module, so `rmmod` is refused
-  while any mount of it is alive, which is what keeps a lazily unmounted
-  superblock from being torn down after the code is gone. write `1` to
-  `/sys/module/droid_lkm_misc/parameters/release` to drop the internal mount
-  before unloading, the same discipline as unmounting before `rmmod`
-- namespace lifetime is owned by the module: unloading while a container runs
-  leaves that namespace neutralized, and a namespace is not freed until then, so
-  `unshare(CLONE_NEWUSER)` leaves an object behind. `status` reports how many are
-  live
-
-## credits
-
-- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) by ravindu644,
-  the container runtime this work exists for
-- [KMSDK](https://github.com/Dere3046/KMSDK), the library SDK that fetches and
-  vendors the dependencies
-- [KallRecon](https://github.com/Dere3046/KallRecon), kernel symbol resolution
-- [Type_info](https://github.com/Dere3046/Type_info), runtime struct layout
-- [KernCall](https://github.com/Dere3046/KernCall), syscall table patching
-- [HooKern](https://github.com/Dere3046/HooKern), inline hook and kprobe engine
-
-## license
+## License
 
 GPL-2.0
