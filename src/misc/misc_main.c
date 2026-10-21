@@ -13,6 +13,7 @@
 #include "misc_proc.h"
 #include "xt_reg.h"
 #include "devtmpfs/devtmpfs.h"
+#include "pts_shield/pts_shield.h"
 #include "userns/userns.h"
 
 bool droid_lkm_misc_verbose;
@@ -29,6 +30,7 @@ static const struct hk_cfg droid_lkm_misc_hk_cfg = {
 static bool droid_lkm_misc_xt_enable = true;
 static bool droid_lkm_misc_userns_enable = true;
 static bool droid_lkm_misc_devtmpfs_enable = true;
+static bool droid_lkm_misc_pts_shield_enable = true;
 
 module_param_named(verbose, droid_lkm_misc_verbose, bool, 0444);
 MODULE_PARM_DESC(verbose, "log symbol probes and every registered item");
@@ -42,10 +44,14 @@ MODULE_PARM_DESC(userns, "offer the /proc/<pid>/ns/user entry and the fake user 
 module_param_named(devtmpfs, droid_lkm_misc_devtmpfs_enable, bool, 0444);
 MODULE_PARM_DESC(devtmpfs, "offer the devtmpfs filesystem the kernel was built without");
 
+module_param_named(pts_shield, droid_lkm_misc_pts_shield_enable, bool, 0444);
+MODULE_PARM_DESC(pts_shield, "shield host devpts root PTY from unprivileged apps");
+
 module_param_named(captrace, droid_lkm_userns_captrace_on, bool, 0444);
 MODULE_PARM_DESC(captrace, "log every capability decision refused for a container task");
 
 static bool droid_lkm_misc_userns_up;
+static bool droid_lkm_misc_pts_shield_up;
 static bool droid_lkm_misc_hk_up;
 
 /*
@@ -125,6 +131,16 @@ static int __init droid_lkm_misc_init(void)
 		droid_lkm_misc_report("userns", "off", "userns=0");
 	}
 
+	if (droid_lkm_misc_pts_shield_enable) {
+		ret = droid_lkm_misc_pts_shield_init();
+		if (ret)
+			droid_lkm_misc_warn("pts_shield unavailable: %d\n", ret);
+		else
+			droid_lkm_misc_pts_shield_up = true;
+	} else {
+		droid_lkm_misc_report("pts shield", "off", "pts_shield=0");
+	}
+
 	return 0;
 
 err_proc:
@@ -138,6 +154,10 @@ err_proc:
 
 static void __exit droid_lkm_misc_exit(void)
 {
+	if (droid_lkm_misc_pts_shield_up) {
+		droid_lkm_misc_pts_shield_exit();
+		droid_lkm_misc_pts_shield_up = false;
+	}
 	if (droid_lkm_misc_userns_up) {
 		droid_lkm_userns_exit();
 		droid_lkm_misc_userns_up = false;
