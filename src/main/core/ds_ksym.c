@@ -185,7 +185,7 @@ bool droid_lkm_text_patch_ready(void)
 	if (!n)
 		return true;
 
-	droid_lkm_warn("inline hooks off, the text patch path is missing:");
+	droid_lkm_warn("text patch path is missing, function hooks take the kprobe route:");
 	for (i = 0; i < ARRAY_SIZE(need); i++)
 		if (!need[i].addr)
 			pr_cont(" %s", need[i].name);

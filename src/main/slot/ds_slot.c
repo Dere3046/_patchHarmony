@@ -1233,19 +1233,16 @@ int droid_lkm_slot_init(void)
 		droid_lkm_warn("sysvipc entries not wired: %d\n", ret);
 
 	/*
-	 * the inline hooks write text, the slot patches above write rodata. rodata
-	 * is page mapped once rodata is locked down, so it survives on a kernel
-	 * that hides _end, text does not: the engine would translate the image
-	 * page with vmalloc_to_pfn and write through whatever pfn comes out
+	 * the nsproxy hooks are not tied to the text patch path: when the kernel
+	 * hides _text the hook layer takes the kprobe route, which is what keeps
+	 * CLONE_NEWPID and CLONE_NEWIPC working there
 	 */
-	if (droid_lkm_text_patch_ready()) {
-		droid_lkm_nsproxy_hook_install();
-		droid_lkm_copy_namespaces_hook_install();
-		if (droid_lkm_nsproxy_release_hooks_install())
-			droid_lkm_warn("nsproxy release hooks unavailable, namespaces stay until unload\n");
-	} else {
-		droid_lkm_warn("create_new_namespaces/copy_namespaces hooks skipped, CLONE_NEWPID|CLONE_NEWIPC stay EINVAL\n");
-	}
+	if (!droid_lkm_text_patch_ready())
+		droid_lkm_info("text patch path unavailable, function hooks take the kprobe route\n");
+	droid_lkm_nsproxy_hook_install();
+	droid_lkm_copy_namespaces_hook_install();
+	if (droid_lkm_nsproxy_release_hooks_install())
+		droid_lkm_warn("nsproxy release hooks unavailable, namespaces stay until unload\n");
 	droid_lkm_clone_slot_install();
 
 	droid_lkm_info("syscall slots patched: unshare=%d reboot=%d\n", __NR_unshare,
