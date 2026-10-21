@@ -11,6 +11,7 @@
 #include <linux/printk.h>
 
 #include "core.h"
+#include "kcfi_safe.h"
 
 #define DROID_LKM_MISC_TAG "droid_lkm_misc"
 
@@ -28,7 +29,7 @@ extern bool droid_lkm_misc_verbose;
 /* the GKI gate rejects part of the export list, so unexported and risky symbols are resolved by name */
 static inline unsigned long __nocfi droid_lkm_misc_sym(const char *name)
 {
-	return kallrecon_klp(name);
+	return kallrecon_klp ? kallrecon_klp(name) : 0;
 }
 
 #endif

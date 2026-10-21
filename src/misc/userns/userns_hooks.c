@@ -29,7 +29,10 @@
 #include <net/net_namespace.h>
 #include <linux/fs.h>
 #include <linux/fs_context.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 #include <linux/mnt_idmapping.h>
+#endif
 #include <linux/err.h>
 #include <linux/uidgid.h>
 
@@ -50,7 +53,9 @@ static int (*droid_lkm_userns_nsproxy_orig)(unsigned long unshare_flags,
 					    struct fs_struct *new_fs);
 static int (*droid_lkm_userns_creds_orig)(struct task_struct *p,
 					  unsigned long clone_flags);
-static bool (*droid_lkm_userns_inodecap_orig)(struct mnt_idmap *idmap,
+#include "ds_shapes.h"
+
+static bool (*droid_lkm_userns_inodecap_orig)(DROID_LKM_IDMAP_PARAM
 					      const struct inode *inode, int cap);
 
 /*
@@ -98,6 +103,7 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 {
 	struct droid_lkm_userns *u;
+	const struct cred *old;
 	unsigned long rest;
 	int ret;
 
@@ -113,18 +119,26 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	if (!u)
 		return -ENOMEM;
 
-	rest = flags & ~CLONE_NEWUSER;
-	ret = droid_lkm_userns_unshare_orig(rest);
+	old = get_task_cred(current);
+
+	ret = droid_lkm_userns_install_current(u);
 	if (ret) {
+		put_cred(old);
 		droid_lkm_userns_destroy(u);
 		return ret;
 	}
 
-	ret = droid_lkm_userns_install_current(u);
-	if (ret)
-		droid_lkm_misc_warn("unshare: credential install failed: %d\n", ret);
+	rest = flags & ~CLONE_NEWUSER;
+	ret = droid_lkm_userns_unshare_orig(rest);
+	if (ret) {
+		droid_lkm_misc_ks.commit_creds((struct cred *)old);
+		droid_lkm_userns_destroy(u);
+		return ret;
+	}
 
-	return ret;
+	put_cred(old);
+
+	return 0;
 }
 
 __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
@@ -149,24 +163,31 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 		return ret;
 	}
 
-	/* the child has not run and copy_creds() built a fresh credential, so this is race free */
+	/* the child has not run and copy_creds() built a fresh credential, write both cred pointers */
+	droid_lkm_userns_install_cred((struct cred *)p->real_cred, u);
 	droid_lkm_userns_install_cred((struct cred *)p->cred, u);
 
 	return 0;
 }
 
-__nocfi noinline bool droid_lkm_userns_inodecap_wrap(struct mnt_idmap *idmap,
+__nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 						     const struct inode *inode,
 						     int cap)
 {
 	struct droid_lkm_userns *u;
 
-	if (droid_lkm_userns_inodecap_orig(idmap, inode, cap))
+	if (droid_lkm_userns_inodecap_orig(DROID_LKM_IDMAP_PASS inode, cap))
 		return true;
 
 	/* an idmapped mount is a different rule set, it arrives with the lens */
-	if (droid_lkm_misc_ks.nop_mnt_idmap && idmap != droid_lkm_misc_ks.nop_mnt_idmap)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+	if (droid_lkm_misc_ks.nop_mnt_idmap &&
+	    (const void *)idmap != (const void *)droid_lkm_misc_ks.nop_mnt_idmap)
 		return false;
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+	if (mnt_userns && mnt_userns != &init_user_ns)
+		return false;
+#endif
 
 	u = droid_lkm_userns_of(current);
 	if (!u)

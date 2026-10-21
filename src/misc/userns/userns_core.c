@@ -85,7 +85,7 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 						 CAP_SETFCAP);
 	u->uns.ns.inum = inum;
 	u->uns.ns.ops = droid_lkm_userns_ops();
-	refcount_set(&u->uns.ns.count, 1);
+	refcount_set(droid_lkm_userns_ns_ref(&u->uns.ns), 1);
 	u->uns.ucounts = NULL;
 	/*
 	 * inc_ucount() walks ns->ucount_max[], which zero would turn into ENOSPC for every
@@ -94,8 +94,10 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 	 */
 	for (i = 0; i < UCOUNT_COUNTS; i++)
 		u->uns.ucount_max[i] = INT_MAX;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	for (i = 0; i < UCOUNT_RLIMIT_COUNTS; i++)
 		u->uns.rlimit_max[i] = LONG_MAX;
+#endif
 	INIT_LIST_HEAD(&u->link);
 
 	/* phase one installs the identity map, the only map a container on this kernel could write */

@@ -113,6 +113,7 @@ static const struct droid_lkm_ns_kind_reg droid_lkm_userns_kind = {
 int droid_lkm_userns_nsops_init(void)
 {
 	struct ns_common *ns;
+	int ret;
 
 	droid_lkm_userns_host_ops = kzalloc(sizeof(*droid_lkm_userns_host_ops),
 					    GFP_KERNEL);
@@ -137,14 +138,32 @@ int droid_lkm_userns_nsops_init(void)
 	refcount_set(&ns->count, 1);
 	droid_lkm_userns_host_placeholder = ns;
 
-	if (!droid_lkm_misc_ks.ns_kind_register)
-		return -ENODEV;
+	if (!droid_lkm_misc_ks.ns_kind_register) {
+		ret = -ENODEV;
+		goto err_free;
+	}
 
-	return droid_lkm_misc_ks.ns_kind_register(&droid_lkm_userns_kind);
+	ret = droid_lkm_misc_ks.ns_kind_register(&droid_lkm_userns_kind);
+	if (ret)
+		goto err_free;
+
+	return 0;
+
+err_free:
+	kfree(droid_lkm_userns_host_placeholder);
+	droid_lkm_userns_host_placeholder = NULL;
+	kfree(droid_lkm_userns_host_ops);
+	droid_lkm_userns_host_ops = NULL;
+	return ret;
 }
 
 void droid_lkm_userns_nsops_exit(void)
 {
 	if (droid_lkm_misc_ks.ns_kind_unregister)
 		droid_lkm_misc_ks.ns_kind_unregister(&droid_lkm_userns_kind);
+
+	kfree(droid_lkm_userns_host_placeholder);
+	droid_lkm_userns_host_placeholder = NULL;
+	kfree(droid_lkm_userns_host_ops);
+	droid_lkm_userns_host_ops = NULL;
 }

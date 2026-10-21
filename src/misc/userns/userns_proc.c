@@ -40,12 +40,15 @@
 #include <linux/proc_fs.h>
 #include <linux/uaccess.h>
 #include <linux/user_namespace.h>
+#include <linux/mutex.h>
 
 #include "misc.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "userns.h"
 #include "hk_inline.h"
+
+static DEFINE_MUTEX(droid_lkm_userns_proc_mutex);
 
 /* "         0          0 4294967295\n" and room for the setgroups answer */
 #define DROID_LKM_USERNS_MAP_TEXT 64
@@ -105,39 +108,93 @@ static int droid_lkm_userns_map_text(const struct uid_gid_map *map, char *buf,
 	return len;
 }
 
-/*
- * the only map this kernel can hold is the identity one, so a write asking for another is
- * refused, not ignored
- */
-static bool droid_lkm_userns_map_is_identity(const char *text)
+static int droid_lkm_userns_map_parse(const char *buf, size_t count,
+				      struct uid_gid_map *new_map)
 {
-	u64 v[3];
-	const char *s = text;
-	int i;
+	const char *p = buf;
+	const char *end = buf + count;
+	unsigned int extents = 0;
+	int i, j;
 
-	for (i = 0; i < 3; i++) {
-		int digits = 0;
+	memset(new_map, 0, sizeof(*new_map));
 
-		while (*s == ' ' || *s == '\t')
-			s++;
+	while (p < end) {
+		u64 v[3] = {0, 0, 0};
 
-		v[i] = 0;
-		while (*s >= '0' && *s <= '9') {
-			v[i] = v[i] * 10 + (*s - '0');
-			if (v[i] > 4294967295ULL)
-				return false;
-			s++;
-			digits++;
+		/* Skip leading blank lines / spaces */
+		while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+			p++;
+
+		if (p >= end)
+			break;
+
+		if (extents >= UID_GID_MAP_MAX_BASE_EXTENTS)
+			return -EINVAL;
+
+		for (i = 0; i < 3; i++) {
+			int digits = 0;
+
+			while (p < end && (*p == ' ' || *p == '\t'))
+				p++;
+
+			while (p < end && *p >= '0' && *p <= '9') {
+				v[i] = v[i] * 10 + (*p - '0');
+				if (v[i] > 4294967295ULL)
+					return -EINVAL;
+				p++;
+				digits++;
+			}
+
+			if (!digits)
+				return -EINVAL;
 		}
 
-		if (!digits)
-			return false;
+		/* Skip trailing spaces in line */
+		while (p < end && (*p == ' ' || *p == '\t'))
+			p++;
+
+		/* Expect newline or end of buffer */
+		if (p < end && *p != '\n' && *p != '\r')
+			return -EINVAL;
+
+		if (p < end)
+			p++;
+
+		/* Check overflow on range: first + count, lower_first + count */
+		if (v[2] == 0 || v[0] + v[2] > 4294967296ULL || v[1] + v[2] > 4294967296ULL)
+			return -EINVAL;
+
+		new_map->extent[extents].first = (u32)v[0];
+		new_map->extent[extents].lower_first = (u32)v[1];
+		new_map->extent[extents].count = (u32)v[2];
+		extents++;
 	}
 
-	while (*s == ' ' || *s == '\t' || *s == '\n')
-		s++;
+	if (extents == 0)
+		return -EINVAL;
 
-	return !*s && v[0] == 0 && v[1] == 0 && v[2] == 4294967295ULL;
+	/* mappings must not overlap in either namespace */
+	for (i = 0; i < extents; i++) {
+		u32 first_i = new_map->extent[i].first;
+		u32 last_i = first_i + new_map->extent[i].count - 1;
+		u32 lower_i = new_map->extent[i].lower_first;
+		u32 lower_last_i = lower_i + new_map->extent[i].count - 1;
+
+		for (j = i + 1; j < extents; j++) {
+			u32 first_j = new_map->extent[j].first;
+			u32 last_j = first_j + new_map->extent[j].count - 1;
+			u32 lower_j = new_map->extent[j].lower_first;
+			u32 lower_last_j = lower_j + new_map->extent[j].count - 1;
+
+			if (first_i <= last_j && first_j <= last_i)
+				return -EINVAL;
+			if (lower_i <= lower_last_j && lower_j <= lower_last_i)
+				return -EINVAL;
+		}
+	}
+
+	new_map->nr_extents = extents;
+	return 0;
 }
 
 static ssize_t droid_lkm_userns_map_read(char __user *ubuf, size_t count,
@@ -153,11 +210,14 @@ static ssize_t droid_lkm_userns_map_read(char __user *ubuf, size_t count,
 		droid_lkm_userns_map_text(map, text, sizeof(text)));
 }
 
-static ssize_t droid_lkm_userns_map_write(struct file *file, const char __user *ubuf,
-					  size_t count, loff_t *ppos)
+static ssize_t droid_lkm_userns_map_write_internal(struct file *file, const char __user *ubuf,
+						   size_t count, loff_t *ppos, bool is_uid)
 {
 	struct user_namespace *ns = file_inode(file)->i_private;
+	struct uid_gid_map *map;
+	struct uid_gid_map new_map;
 	char text[DROID_LKM_USERNS_MAP_TEXT];
+	int ret, i;
 
 	/* upstream: one write, at the beginning, of less than a page */
 	if (*ppos != 0 || count >= sizeof(text))
@@ -170,6 +230,11 @@ static ssize_t droid_lkm_userns_map_write(struct file *file, const char __user *
 	if (!ns || ns == droid_lkm_userns_init_uns)
 		return -EPERM;
 
+	if (!droid_lkm_userns_is_ours(ns))
+		return -EPERM;
+
+	map = is_uid ? &ns->uid_map : &ns->gid_map;
+
 	if (!count)
 		return -EINVAL;
 
@@ -177,12 +242,46 @@ static ssize_t droid_lkm_userns_map_write(struct file *file, const char __user *
 		return -EFAULT;
 	text[count] = 0;
 
-	if (!droid_lkm_userns_map_is_identity(text))
+	if (mutex_lock_killable(&droid_lkm_userns_proc_mutex))
+		return -EINTR;
+
+	/* upstream: defining a mapping is a one-shot process */
+	if (map->nr_extents != 0) {
+		mutex_unlock(&droid_lkm_userns_proc_mutex);
 		return -EPERM;
+	}
+
+	ret = droid_lkm_userns_map_parse(text, count, &new_map);
+	if (ret) {
+		mutex_unlock(&droid_lkm_userns_proc_mutex);
+		return ret;
+	}
+
+	for (i = 0; i < new_map.nr_extents; i++) {
+		map->extent[i].first = new_map.extent[i].first;
+		map->extent[i].lower_first = new_map.extent[i].lower_first;
+		map->extent[i].count = new_map.extent[i].count;
+	}
+	smp_wmb();
+	map->nr_extents = new_map.nr_extents;
+
+	mutex_unlock(&droid_lkm_userns_proc_mutex);
 
 	*ppos += count;
 
 	return count;
+}
+
+static ssize_t droid_lkm_userns_uid_map_write(struct file *file, const char __user *ubuf,
+					      size_t count, loff_t *ppos)
+{
+	return droid_lkm_userns_map_write_internal(file, ubuf, count, ppos, true);
+}
+
+static ssize_t droid_lkm_userns_gid_map_write(struct file *file, const char __user *ubuf,
+					      size_t count, loff_t *ppos)
+{
+	return droid_lkm_userns_map_write_internal(file, ubuf, count, ppos, false);
 }
 
 static ssize_t droid_lkm_userns_uid_map_read(struct file *file, char __user *ubuf,
@@ -215,27 +314,64 @@ static ssize_t droid_lkm_userns_setgroups_read(struct file *file, char __user *u
 	return droid_lkm_misc_proc_read_text(ubuf, count, ppos, text, strlen(text));
 }
 
-/*
- * upstream stores the answer in user_namespace.flags and may_setgroups() reads it back
- * through a stub that answers true, so accepting the write would set a flag nothing reads
- */
 static ssize_t droid_lkm_userns_setgroups_write(struct file *file,
 						const char __user *ubuf,
 						size_t count, loff_t *ppos)
 {
-	return -EPERM;
+	struct user_namespace *ns = file_inode(file)->i_private;
+	char kbuf[16];
+
+	if (*ppos != 0 || count >= sizeof(kbuf))
+		return -EINVAL;
+
+	if (!ns || ns == droid_lkm_userns_init_uns)
+		return -EPERM;
+
+	if (!droid_lkm_userns_is_ours(ns))
+		return -EPERM;
+
+	if (copy_from_user(kbuf, ubuf, count))
+		return -EFAULT;
+	kbuf[count] = 0;
+
+	if (mutex_lock_killable(&droid_lkm_userns_proc_mutex))
+		return -EINTR;
+
+	/* upstream: cannot change setgroups after gid_map is written */
+	if (ns->gid_map.nr_extents != 0) {
+		mutex_unlock(&droid_lkm_userns_proc_mutex);
+		return -EPERM;
+	}
+
+	if (sysfs_streq(kbuf, "deny"))
+		ns->flags &= ~USERNS_SETGROUPS_ALLOWED;
+	else if (sysfs_streq(kbuf, "allow")) {
+		/* A user namespace cannot re-enable setgroups */
+		if (!(ns->flags & USERNS_SETGROUPS_ALLOWED)) {
+			mutex_unlock(&droid_lkm_userns_proc_mutex);
+			return -EPERM;
+		}
+	} else {
+		mutex_unlock(&droid_lkm_userns_proc_mutex);
+		return -EINVAL;
+	}
+
+	mutex_unlock(&droid_lkm_userns_proc_mutex);
+
+	*ppos += count;
+	return count;
 }
 
 static const struct file_operations droid_lkm_userns_uid_map_fops = {
 	.read		= droid_lkm_userns_uid_map_read,
-	.write		= droid_lkm_userns_map_write,
+	.write		= droid_lkm_userns_uid_map_write,
 	.llseek		= droid_lkm_misc_proc_llseek,
 	.owner		= THIS_MODULE,
 };
 
 static const struct file_operations droid_lkm_userns_gid_map_fops = {
 	.read		= droid_lkm_userns_gid_map_read,
-	.write		= droid_lkm_userns_map_write,
+	.write		= droid_lkm_userns_gid_map_write,
 	.llseek		= droid_lkm_misc_proc_llseek,
 	.owner		= THIS_MODULE,
 };
