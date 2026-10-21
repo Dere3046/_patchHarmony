@@ -18,6 +18,7 @@
 #include "hk_patch.h"
 #include "ds_compat.h"
 #include "ds_hook.h"
+#include "kcfi_safe.h"
 
 #define DROID_LKM_TAG "droid_lkm"
 

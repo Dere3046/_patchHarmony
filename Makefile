@@ -144,6 +144,7 @@ ccflags-y += -Wno-declaration-after-statement
 # dead static hk_build_jump in HooKern
 ccflags-y += -Wno-unused-function
 ccflags-y += -Wno-strict-prototypes
+ccflags-y += -Wno-unknown-sanitizers
 ccflags-y += -I$(src)/src -I$(src)/src/compat/vendor
 ccflags-y += -I$(src)/src/hook -I$(src)/src/compat
 ccflags-y += -I$(src)/src/main/core -I$(src)/src/main/slot -I$(src)/src/main/pidns
@@ -161,6 +162,9 @@ ccflags-y += -Wno-missing-prototypes
 
 # KernCall: enable sys_call_table slot patching
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
+
+# Suppress outbound KCFI indirect-call traps on trampoline branches while keeping inbound hashes
+ccflags-y += -include $(src)/src/kcfi_safe.h
 
 all:
 	@mkdir -p $(sort $(dir $(addprefix $(ODIR)/,$(droid_lkm-y) $(droid_lkm_vendor-y) $(droid_lkm_misc-y))))
