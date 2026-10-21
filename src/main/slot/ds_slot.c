@@ -541,10 +541,10 @@ static bool droid_lkm_nsproxy_last(struct nsproxy *nsp)
 #endif
 }
 
-static void droid_lkm_nsproxy_switch_run(struct task_struct *p,
-					 struct nsproxy *new,
-					 void (*fn)(struct task_struct *,
-						    struct nsproxy *))
+static __nocfi noinline void droid_lkm_nsproxy_switch_run(struct task_struct *p,
+							 struct nsproxy *new,
+							 void (*fn)(struct task_struct *,
+								    struct nsproxy *))
 {
 	struct nsproxy *old = p->nsproxy;
 	struct ipc_namespace *ipc = NULL;
@@ -585,8 +585,11 @@ static void droid_lkm_nsproxy_switch(struct task_struct *p, struct nsproxy *new)
 
 	if (!fn)
 		fn = droid_lkm_ks.switch_task_namespaces;
-	if (fn)
-		droid_lkm_nsproxy_switch_run(p, new, fn);
+	if (!fn)
+		return;
+	ds_hook_enter(&droid_lkm_switch_hook);
+	droid_lkm_nsproxy_switch_run(p, new, fn);
+	ds_hook_leave(&droid_lkm_switch_hook);
 }
 
 static int droid_lkm_nsproxy_release_hooks_install(void)

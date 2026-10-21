@@ -67,7 +67,7 @@ static const struct proc_ns_operations *droid_lkm_ipcns_neutral_ops;
 
 static struct nsproxy *droid_lkm_init_nsproxy;
 
-static void ds_free_ipc_ns(struct ipc_namespace *ns);
+static __nocfi noinline void ds_free_ipc_ns(struct ipc_namespace *ns);
 
 static struct ipc_namespace *to_ipc_ns(struct ns_common *ns)
 {
@@ -227,7 +227,7 @@ out_free:
 	return ERR_PTR(err);
 }
 
-static void ds_free_ipc_ns(struct ipc_namespace *ns)
+static __nocfi noinline void ds_free_ipc_ns(struct ipc_namespace *ns)
 {
 	if (!ns)
 		return;
@@ -298,7 +298,7 @@ struct ipc_namespace *droid_lkm_ipcns_get(struct ipc_namespace *ns)
 	return ns;
 }
 
-void droid_lkm_ipcns_put(struct ipc_namespace *ns)
+__nocfi noinline void droid_lkm_ipcns_put(struct ipc_namespace *ns)
 {
 	struct droid_lkm_ipcns_entry *e = NULL, *iter;
 	unsigned long flags;

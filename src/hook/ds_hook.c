@@ -223,6 +223,13 @@ bool ds_hook_degrade_enabled(void)
 	return ds_hook_degrade;
 }
 
+bool ds_hook_enter(struct ds_hook *h)
+{
+	if (!h || h->route != DS_HOOK_KPROBE || !h->redir)
+		return false;
+	return hk_redir_guard_enter(h->redir);
+}
+
 void ds_hook_leave(struct ds_hook *h)
 {
 	if (h && h->route == DS_HOOK_KPROBE)

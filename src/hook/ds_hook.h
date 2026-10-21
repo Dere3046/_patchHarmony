@@ -56,6 +56,9 @@ bool ds_hook_degrade_enabled(void);
 /* the kprobe route parks the calling task, the replacement clears that here */
 void ds_hook_leave(struct ds_hook *h);
 
+/* a caller that starts the call itself marks the guard before entering orig */
+bool ds_hook_enter(struct ds_hook *h);
+
 int ds_hook_remove(struct ds_hook *h);
 void ds_hook_exit(void);
 void ds_hook_report(void);
