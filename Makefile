@@ -118,9 +118,9 @@ ccflags-y += -Wno-missing-prototypes
 # KernCall: enable sys_call_table slot patching
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
 
-# KallRecon: fast concurrent discovery with aggressive search strategy
-ccflags-y += -DKALLRECON_RAANA -DKALLRECON_RAANA_FALLBACK -DKALLRECON_FIRST_HIT \
-             -DKALLRECON_RAANA_NUM -DKALLRECON_VARIANT_FAST
+# KallRecon: robust parallel raana engine with legacy fallback
+ccflags-y += -DKALLRECON_RAANA -DKALLRECON_RAANA_FALLBACK -DKALLRECON_RAANA_NUM
+
 
 # Suppress outbound KCFI indirect-call traps on trampoline branches while keeping inbound hashes
 ccflags-y += -include $(src)/src/kcfi_safe.h
