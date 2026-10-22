@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "module": "none",
+    "lib": ["ES2017", "DOM"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "removeComments": false,
+    "newLine": "lf",
+    "rootDir": "src",
+    "outDir": "../module/webroot"
+  },
+  "include": ["src/**/*.ts"]
+}

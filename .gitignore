@@ -10,3 +10,6 @@ out/
 Module.symvers
 modules.order
 test/
+dist/
+build/
+node_modules/

@@ -1,0 +1,11 @@
+{
+  "name": "phdroid-webui",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
