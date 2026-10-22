@@ -48,6 +48,13 @@ unsigned long ds_compat_sym(const char *name)
 
 	addr = kallrecon_klp(name);
 	/*
+	 * kallrecon_klp is the kernel's own kallsyms_lookup_name. a kernel that
+	 * hides an address from it, _text being the image base, still has the
+	 * symbol in its table, so the library's own walk answers that case
+	 */
+	if (!addr)
+		addr = kallsyms_name_to_addr(name);
+	/*
 	 * the shims in a module are defined under the kernel's own names, and the
 	 * lookup searches the module tables too, so a kernel that does not carry the
 	 * name hands back the shim instead. that is not the kernel symbol: a shim
