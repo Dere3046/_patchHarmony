@@ -158,13 +158,13 @@ if [ "$1" = "status" ]; then
 	echo "kernel=$(uname -r)"
 	echo "kmi=$(conf kmi -)"
 	if loaded droid_lkm; then echo "loaded=1"; else echo "loaded=0"; fi
-	if loaded droid_lkm_compat; then echo "compat=1"; else echo "compat=0"; fi
+	if loaded droid_lkm_vendor; then echo "compat=1"; else echo "compat=0"; fi
 	case "$(conf compat off)" in
 	on | 1 | yes | true) cw=on ;;
 	auto) [ "$(conf oplus 0)" = 1 ] && cw=on || cw=off ;;
 	*) cw=off ;;
 	esac
-	if [ "$cw" = on ] && [ ! -f "$MODDIR/ko/droid_lkm_compat.ko" ]; then cw=missing; fi
+	if [ "$cw" = on ] && [ ! -f "$MODDIR/ko/droid_lkm_vendor.ko" ]; then cw=missing; fi
 	echo "compat_wanted=$cw"
 	if [ -f "$BLOCK" ]; then echo "blocked=1"; else echo "blocked=0"; fi
 	if [ -f "$MODDIR/insmod.crash" ]; then echo "crash=1"; else echo "crash=0"; fi
@@ -176,7 +176,7 @@ if [ "$1" = "status" ]; then
 		[ -f "$p" ] || continue
 		echo "param.${p##*/}=$(cat "$p" 2>/dev/null)"
 	done
-	for p in /sys/module/droid_lkm_compat/parameters/*; do
+	for p in /sys/module/droid_lkm_vendor/parameters/*; do
 		[ -f "$p" ] || continue
 		echo "cparam.${p##*/}=$(cat "$p" 2>/dev/null)"
 	done
@@ -242,7 +242,7 @@ fi
 [ "$core_ok" = 1 ] || exit 1
 
 # 兼容模块：安装时已按指纹把 compat 解析成 on/off
-COMPAT=$MODDIR/ko/droid_lkm_compat.ko
+COMPAT=$MODDIR/ko/droid_lkm_vendor.ko
 want_compat=0
 case "$(conf compat off)" in
 on | 1 | yes | true) want_compat=1 ;;
@@ -253,21 +253,21 @@ if [ "$want_compat" != 1 ]; then
 	ph_log "compat: off (oplus=$(conf oplus 0))"
 elif [ ! -f "$COMPAT" ]; then
 	ph_log "compat: no build in this package"
-elif loaded droid_lkm_compat; then
-	ph_log "droid_lkm_compat already loaded"
+elif loaded droid_lkm_vendor; then
+	ph_log "droid_lkm_vendor already loaded"
 else
-	ph_log "loading droid_lkm_compat.ko"
+	ph_log "loading droid_lkm_vendor.ko"
 	guarded_insmod "$COMPAT" \
 		"ghost=$(bool ghost 1)" \
 		"ghost_match=$(conf ghost_match oplus_)" \
 		"pid_max_cap=$(sint pid_max_cap 0)" \
 		"inline_hook=$(bool inline_hook 1)"
 	rc=$?
-	if [ "$rc" -eq 0 ] && loaded droid_lkm_compat; then
-		ph_log "droid_lkm_compat loaded"
+	if [ "$rc" -eq 0 ] && loaded droid_lkm_vendor; then
+		ph_log "droid_lkm_vendor loaded"
 		echo "ok: core+compat" > "$MODDIR/last_result"
 	else
-		ph_log "droid_lkm_compat failed (rc=$rc)"
+		ph_log "droid_lkm_vendor failed (rc=$rc)"
 		echo "fail: compat rc=$rc" > "$MODDIR/last_result"
 		exit 1
 	fi

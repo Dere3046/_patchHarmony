@@ -39,7 +39,7 @@ jobs:
           name: droid_lkm-${{ matrix.kmi }}
           path: |
             out/${{ matrix.kmi }}/droid_lkm.ko
-            out/${{ matrix.kmi }}/droid_lkm_compat.ko
+            out/${{ matrix.kmi }}/droid_lkm_vendor.ko
           if-no-files-found: error
 
   package:

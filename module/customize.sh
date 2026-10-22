@@ -121,8 +121,8 @@ fi
 
 mkdir -p "$MODPATH/ko"
 cp "$MODPATH/kernels/$BEST/droid_lkm.ko" "$MODPATH/ko/" || abort "! cannot copy droid_lkm.ko"
-if [ -f "$MODPATH/kernels/$BEST/droid_lkm_compat.ko" ]; then
-	cp "$MODPATH/kernels/$BEST/droid_lkm_compat.ko" "$MODPATH/ko/"
+if [ -f "$MODPATH/kernels/$BEST/droid_lkm_vendor.ko" ]; then
+	cp "$MODPATH/kernels/$BEST/droid_lkm_vendor.ko" "$MODPATH/ko/"
 fi
 rm -rf "$MODPATH/kernels"
 

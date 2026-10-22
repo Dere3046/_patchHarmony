@@ -90,8 +90,8 @@ stage() { # <kmi>...
 		mkdir -p "$STAGE/kernels/$k"
 		cp "$ROOT/out/$k/droid_lkm.ko" "$STAGE/kernels/$k/"
 		# compat 只有部分 KMI 会构建出来（取决于目标内核有没有 nop_mnt_idmap）
-		if [ -f "$ROOT/out/$k/droid_lkm_compat.ko" ]; then
-			cp "$ROOT/out/$k/droid_lkm_compat.ko" "$STAGE/kernels/$k/"
+		if [ -f "$ROOT/out/$k/droid_lkm_vendor.ko" ]; then
+			cp "$ROOT/out/$k/droid_lkm_vendor.ko" "$STAGE/kernels/$k/"
 		fi
 	done
 
