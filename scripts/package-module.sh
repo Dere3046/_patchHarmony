@@ -93,6 +93,9 @@ stage() { # <kmi>...
 		if [ -f "$ROOT/out/$k/droid_lkm_vendor.ko" ]; then
 			cp "$ROOT/out/$k/droid_lkm_vendor.ko" "$STAGE/kernels/$k/"
 		fi
+		if [ -f "$ROOT/out/$k/droid_lkm_misc.ko" ]; then
+			cp "$ROOT/out/$k/droid_lkm_misc.ko" "$STAGE/kernels/$k/"
+		fi
 	done
 
 	prop_set "$STAGE/module.prop" version "$VERSION"

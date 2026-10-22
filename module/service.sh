@@ -273,4 +273,17 @@ else
 	fi
 fi
 
+# 杂项模块：devtmpfs, userns, xt_addrtype
+MISC=$MODDIR/ko/droid_lkm_misc.ko
+if [ -f "$MISC" ] && ! loaded droid_lkm_misc; then
+	ph_log "loading droid_lkm_misc.ko"
+	guarded_insmod "$MISC"
+	if loaded droid_lkm_misc; then
+		ph_log "droid_lkm_misc loaded"
+		echo "ok: core+compat+misc" > "$MODDIR/last_result"
+	else
+		ph_log "droid_lkm_misc failed"
+	fi
+fi
+
 exit 0
