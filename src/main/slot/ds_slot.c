@@ -156,7 +156,7 @@ static bool droid_lkm_gate_allow(void)
 	X(shmat, __NR_shmat, 305, compat_sys_shmat, 0)				\
 	X(shmdt, __NR_shmdt, 306, sys_shmdt, 0)
 
-static long droid_lkm_ipc_orig_call(droid_lkm_syscall_fn *orig,
+static __nocfi noinline long droid_lkm_ipc_orig_call(droid_lkm_syscall_fn *orig,
 				    const struct pt_regs *regs)
 {
 	if (!orig || !*orig)
@@ -839,7 +839,7 @@ static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 	return true;
 }
 
-static long droid_lkm_unshare_legacy(const struct pt_regs *regs)
+static __nocfi noinline long droid_lkm_unshare_legacy(const struct pt_regs *regs)
 {
 	struct pt_regs tmp = *regs;
 	unsigned long flags = tmp.regs[0];
@@ -872,7 +872,7 @@ static long droid_lkm_unshare_legacy(const struct pt_regs *regs)
 	return ret;
 }
 
-static long droid_lkm_sys_unshare(const struct pt_regs *regs)
+static __nocfi noinline long droid_lkm_sys_unshare(const struct pt_regs *regs)
 {
 	unsigned long flags = regs->regs[0];
 	long ret;
@@ -918,7 +918,7 @@ static long droid_lkm_sys_unshare(const struct pt_regs *regs)
 bool droid_lkm_slot_skip_sysvipc(void) { return droid_lkm_skip_sysvipc; }
 bool droid_lkm_slot_no_fake_ns(void) { return droid_lkm_no_fake_ns; }
 
-static long droid_lkm_sys_reboot(const struct pt_regs *regs)
+static __nocfi noinline long droid_lkm_sys_reboot(const struct pt_regs *regs)
 {
 	int magic1 = (int)regs->regs[0];
 	int magic2 = (int)regs->regs[1];
@@ -1062,7 +1062,7 @@ static __nocfi noinline bool droid_lkm_clone_ns_ready(unsigned long flags)
 	       droid_lkm_ks.switch_task_namespaces && droid_lkm_gate_allow();
 }
 
-static long droid_lkm_sys_clone(const struct pt_regs *regs)
+static __nocfi noinline long droid_lkm_sys_clone(const struct pt_regs *regs)
 {
 	struct droid_lkm_clone_ctx ctx;
 	struct pt_regs tmp;
@@ -1087,7 +1087,7 @@ static long droid_lkm_sys_clone(const struct pt_regs *regs)
 	return ret;
 }
 
-static long droid_lkm_sys_clone3(const struct pt_regs *regs)
+static __nocfi noinline long droid_lkm_sys_clone3(const struct pt_regs *regs)
 {
 	void __user *uargs = (void __user *)regs->regs[0];
 	size_t usize = (size_t)regs->regs[1];

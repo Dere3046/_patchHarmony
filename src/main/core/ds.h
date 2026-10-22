@@ -62,8 +62,6 @@ void droid_lkm_keepalive_pin(void);
 void droid_lkm_keepalive_sync(void);
 void droid_lkm_keepalive_release(void);
 
-#endif
-
 /* the compat layer owns the write cascade, so there is one implementation */
 static inline int droid_lkm_patch_write(void *dst, unsigned long val)
 {
@@ -112,3 +110,5 @@ struct dentry;
 struct dentry_operations;
 struct dentry *lookup_one_len(const char *name, struct dentry *base, int len);
 void d_set_d_op(struct dentry *dentry, const struct dentry_operations *op);
+
+#endif /* DROID_LKM_H */
