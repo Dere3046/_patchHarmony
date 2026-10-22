@@ -145,6 +145,16 @@ int droid_lkm_ksym_init(void)
 {
 	ds_compat_bind(droid_lkm_syms, ARRAY_SIZE(droid_lkm_syms));
 
+	if (droid_lkm_verbose) {
+		unsigned long raw_text = kallrecon_klp("_text");
+
+		droid_lkm_dbg("ksym raw: klnum=%u klp=%px _text=0x%lx in_mod=%d _stext=0x%lx _end=0x%lx table=0x%lx/0x%lx\n",
+			      klnum_val, kallrecon_klp, raw_text,
+			      within_module(raw_text, THIS_MODULE),
+			      kallrecon_klp("_stext"), kallrecon_klp("_end"),
+			      droid_lkm_ks.text_start, droid_lkm_ks.text_end);
+	}
+
 	if (!droid_lkm_ks.proc_alloc_inum || !droid_lkm_ks.proc_free_inum ||
 	    !droid_lkm_ks.disable_pid_allocation || !droid_lkm_ks.group_send_sig_info ||
 	    !droid_lkm_ks.kernel_wait4) {
