@@ -6,6 +6,9 @@ MDIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 # make clean would wipe every target
 ODIR := $(MDIR)/out/$(if $(VER),$(VER),unknown)
 
+# KallRecon: enable parallel raana discovery engine and aggressive search strategy
+KALLRECON_RAANA := 1
+
 DEPS := Type_info KernCall HooKern vendorcompat
 include $(MDIR)/mk/deps.mk
 
@@ -114,6 +117,10 @@ ccflags-y += -Wno-missing-prototypes
 
 # KernCall: enable sys_call_table slot patching
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
+
+# KallRecon: fast concurrent discovery with aggressive search strategy
+ccflags-y += -DKALLRECON_RAANA -DKALLRECON_RAANA_FALLBACK -DKALLRECON_FIRST_HIT \
+             -DKALLRECON_RAANA_NUM -DKALLRECON_VARIANT_FAST
 
 # Suppress outbound KCFI indirect-call traps on trampoline branches while keeping inbound hashes
 ccflags-y += -include $(src)/src/kcfi_safe.h

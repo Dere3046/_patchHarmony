@@ -10,7 +10,8 @@ SDKREV=$(cat .sdk-version)
 
 if [ ! -d .sdk/.git ]; then
 	rm -rf .sdk
-	git clone git@github.com:Dere3046/KMSDK.git .sdk
+	git clone git@github.com:Dere3046/KMSDK.git .sdk 2>/dev/null || \
+	git clone https://github.com/Dere3046/KMSDK.git .sdk
 fi
 
 case $SDKREV in

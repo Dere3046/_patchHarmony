@@ -1,11 +1,12 @@
-out/
 .sdk/
-*.ko
-*.mod.c
-*.mod
-*.o
-*.a
+deps/
 out/
+*.ko
+*.o
+*.mod
+*.mod.c
+*.cmd
+*.symversions
 Module.symvers
 modules.order
 test/
@@ -13,3 +14,4 @@ dist/
 build/
 node_modules/
 build_out/
+

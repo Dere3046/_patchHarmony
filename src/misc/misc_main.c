@@ -20,8 +20,9 @@ bool droid_lkm_misc_verbose;
 
 static unsigned long __nocfi droid_lkm_misc_hk_resolve(const char *name)
 {
-	return kallrecon_klp ? kallrecon_klp(name) : 0;
+	return droid_lkm_misc_sym(name);
 }
+
 
 static const struct hk_cfg droid_lkm_misc_hk_cfg = {
 	.resolve = droid_lkm_misc_hk_resolve,
