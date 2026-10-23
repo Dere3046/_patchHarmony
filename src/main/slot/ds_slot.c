@@ -790,7 +790,7 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	}
 
 	if (!(inner & DROID_LKM_NS_FLAGS)) {
-		priv = droid_lkm_cnn_orig(0, tsk, current_user_ns(), tsk->fs);
+		priv = droid_lkm_cnn_orig(0, tsk, droid_lkm_current_user_ns(), tsk->fs);
 		if (IS_ERR(priv)) {
 			droid_lkm_pidns_put(new_pid);
 			droid_lkm_ipcns_put(new_ipc);
@@ -828,7 +828,7 @@ static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 		return false;
 
 	if ((flags & DROID_LKM_NS_ALL) &&
-	    !ns_capable(current_user_ns(), CAP_SYS_ADMIN))
+	    !ns_capable(droid_lkm_current_user_ns(), CAP_SYS_ADMIN))
 		return false;
 
 	if ((flags & CLONE_NEWPID) && current->nsproxy &&
@@ -1009,7 +1009,8 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 		}
 	}
 
-	ctx->priv = droid_lkm_cnn_orig(0, current, current_user_ns(), current->fs);
+	ctx->priv = droid_lkm_cnn_orig(0, current, droid_lkm_current_user_ns(),
+				       current->fs);
 	if (IS_ERR(ctx->priv)) {
 		droid_lkm_pidns_put(new_pid);
 		droid_lkm_ipcns_put(new_ipc);
@@ -1033,7 +1034,7 @@ __nocfi noinline void droid_lkm_clone_ctx_leave(struct droid_lkm_clone_ctx *ctx)
 	if (!ctx->priv)
 		return;
 
-	priv2 = droid_lkm_cnn_orig(0, current, current_user_ns(), current->fs);
+	priv2 = droid_lkm_cnn_orig(0, current, droid_lkm_current_user_ns(), current->fs);
 	if (IS_ERR(priv2)) {
 		current->nsproxy->pid_ns_for_children =
 			(struct pid_namespace *)ctx->save_pid;

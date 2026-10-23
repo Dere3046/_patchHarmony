@@ -18,6 +18,7 @@
 #include <linux/ipc_namespace.h>
 
 #include "ds.h"
+#include "ds_ksym.h"
 #include "ds_shapes.h"
 #include "ds_nsops.h"
 #include "ds_pidns.h"
@@ -145,7 +146,7 @@ static int droid_lkm_host_pid_install(struct nsset *nsset, struct ns_common *ns)
 {
 	struct pid_namespace *active = task_active_pid_ns(current);
 
-	if (!ns_capable(&init_user_ns, CAP_SYS_ADMIN) ||
+	if (!ns_capable(droid_lkm_ks.init_user_ns, CAP_SYS_ADMIN) ||
 	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -223,7 +224,7 @@ int droid_lkm_ns_ops_host_init(void)
 		return -ENOMEM;
 	}
 
-	ns->user_ns = &init_user_ns;
+	ns->user_ns = droid_lkm_ks.init_user_ns;
 	droid_lkm_ns_stash_clear(&ns->ns);
 	ns->ns.inum = PROC_PID_INIT_INO;
 	refcount_set(droid_lkm_pidns_refcount(ns), DROID_LKM_NS_LEAK_REFCOUNT);

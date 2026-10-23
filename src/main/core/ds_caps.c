@@ -168,7 +168,8 @@ int droid_lkm_caps_init(void)
 	 */
 	caps->perm_takes_idmap = idmap_none != NULL ||
 				 caps->version >= DROID_LKM_VERSION(6, 3, 0);
-	caps->idmap_none = idmap_none ? idmap_none : (void *)&init_user_ns;
+	caps->idmap_none = idmap_none ? idmap_none :
+					       (void *)droid_lkm_ks.init_user_ns;
 	/*
 	 * do_mmap gained vm_flags in the same generation that moved the locked
 	 * unmap entry to do_vmi_munmap, so the symbol answers this one and the

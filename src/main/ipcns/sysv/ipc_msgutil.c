@@ -37,7 +37,6 @@ struct ipc_namespace init_ipc_ns = {
 #else
 	.count = REFCOUNT_INIT(1),
 #endif
-	.user_ns = &init_user_ns,
 	.ns.inum = PROC_IPC_INIT_INO,
 	/*
 	 * the kernel's own ipcns_operations is unexported, and the module hands

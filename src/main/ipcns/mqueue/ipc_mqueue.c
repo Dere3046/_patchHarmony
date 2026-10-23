@@ -46,6 +46,7 @@
 #include "ds_caps.h"
 #include "ds_shapes.h"
 #include "ds_ipc_compat.h"
+#include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include "ipc_util.h"
 #include "ipc_mqueue_compat.h"
@@ -464,7 +465,7 @@ static int mqueue_init_fs_context(struct fs_context *fc)
 
 	ctx->ipc_ns = get_ipc_ns(droid_lkm_ipcns_current());
 	put_user_ns(fc->user_ns);
-	fc->user_ns = get_user_ns(ctx->ipc_ns->user_ns);
+	fc->user_ns = droid_lkm_get_user_ns(ctx->ipc_ns->user_ns);
 	fc->fs_private = ctx;
 	fc->ops = &mqueue_fs_context_ops;
 	return 0;
@@ -488,7 +489,7 @@ static __nocfi noinline struct vfsmount *mq_create_mount(struct ipc_namespace *n
 	put_ipc_ns(ctx->ipc_ns);
 	ctx->ipc_ns = get_ipc_ns(ns);
 	put_user_ns(fc->user_ns);
-	fc->user_ns = get_user_ns(ctx->ipc_ns->user_ns);
+	fc->user_ns = droid_lkm_get_user_ns(ctx->ipc_ns->user_ns);
 
 	mnt = fc_mount(fc);
 	put_fs_context(fc);
@@ -1511,7 +1512,7 @@ retry:
 		}
 
 		info->notify_owner = get_pid(task_tgid(current));
-		info->notify_user_ns = get_user_ns(current_user_ns());
+		info->notify_user_ns = droid_lkm_get_user_ns(droid_lkm_current_user_ns());
 		droid_lkm_mq_inode_touch(inode);
 	}
 	spin_unlock(&info->lock);

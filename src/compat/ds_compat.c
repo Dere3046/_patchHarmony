@@ -39,7 +39,7 @@ int ds_compat_init(const char *module, const char *own_prefix)
 	return 0;
 }
 
-unsigned long ds_compat_sym(const char *name)
+__nocfi noinline unsigned long ds_compat_sym(const char *name)
 {
 	unsigned long addr;
 

@@ -113,7 +113,7 @@ __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
 		if (!droid_lkm_ks.copy_ipcs || !droid_lkm_ks.put_ipc_ns)
 			return ERR_PTR(-EOPNOTSUPP);
 
-		ns = droid_lkm_ks.copy_ipcs(CLONE_NEWIPC, current_user_ns(),
+		ns = droid_lkm_ks.copy_ipcs(CLONE_NEWIPC, droid_lkm_current_user_ns(),
 					    droid_lkm_ipcns_current());
 		if (IS_ERR(ns))
 			return ns;
@@ -172,7 +172,7 @@ out_kernel_ns:
 	refcount_set(droid_lkm_ipcns_refcount(ns), 1);
 	/* same ownership rule as the fake pid namespace, see droid_lkm_pidns_create */
 	ns->user_ns = current_cred()->user_ns;
-	get_user_ns(ns->user_ns);
+	droid_lkm_get_user_ns(ns->user_ns);
 	ns->ucounts = NULL;
 
 	err = msg_init_ns(ns);
@@ -507,7 +507,7 @@ int droid_lkm_ipcns_init(void)
 	droid_lkm_ns_set_ops(&droid_lkm_ipcns_host->ns, &droid_lkm_ipcns_ops,
 			     CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(droid_lkm_ipcns_host), 1);
-	droid_lkm_ipcns_host->user_ns = &init_user_ns;
+	droid_lkm_ipcns_host->user_ns = droid_lkm_ks.init_user_ns;
 
 	droid_lkm_ipcns_init_entry.ns = droid_lkm_ipcns_host;
 	INIT_LIST_HEAD(&droid_lkm_ipcns_init_entry.node);

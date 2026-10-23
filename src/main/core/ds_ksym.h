@@ -259,10 +259,126 @@ struct droid_lkm_ksym {
 	unsigned long kimage_voffset;	/* kimage_voffset */
 	unsigned long vmalloc_to_pfn;	/* vmalloc_to_pfn */
 	unsigned long set_fixmap;	/* __set_fixmap */
+
+	/* the USER_NS=n stubs hard-code these, resolve them once */
+	struct user_namespace *init_user_ns;	/* init_user_ns */
+	struct task_struct *init_task;		/* init_task */
 };
 
-/* false when the text patch path cannot run on this kernel, one warning names what is missing */
+/* false when the text patch path cannot run, one warning names what is missing */
 bool droid_lkm_text_patch_ready(void);
+
+/* with USER_NS off current_user_ns() is &init_user_ns, resolve it */
+struct user_namespace *droid_lkm_current_user_ns(void);
+
+/* get_user_ns() returns &init_user_ns when USER_NS is off */
+struct user_namespace *droid_lkm_get_user_ns(struct user_namespace *ns);
+
+/*
+ * one line per symbol, ds_ksym.c expands its binding table from this list. the
+ * order follows the table's groups: core helpers, security and audit, the 5.10
+ * ucounts pair, then the helpers a stock image may omit
+ */
+#define DROID_LKM_SYM_LIST(X) \
+	X(proc_alloc_inum, "proc_alloc_inum") \
+	X(proc_free_inum, "proc_free_inum") \
+	X(disable_pid_allocation, "disable_pid_allocation") \
+	X(group_send_sig_info, "group_send_sig_info") \
+	X(kernel_wait4, "kernel_wait4") \
+	X(do_mmap, "do_mmap") \
+	X(do_mmap_legacy, "do_mmap") \
+	X(__do_munmap, "__do_munmap") \
+	X(do_mas_munmap, "do_mas_munmap") \
+	X(do_vmi_munmap, "do_vmi_munmap") \
+	X(wake_q_add, "wake_q_add") \
+	X(wake_q_add_safe, "wake_q_add_safe") \
+	X(wake_up_q, "wake_up_q") \
+	X(schedule_hrtimeout_range, "schedule_hrtimeout_range") \
+	X(get_timespec64, "get_timespec64") \
+	X(get_old_timespec32, "get_old_timespec32") \
+	X(__percpu_counter_sum, "__percpu_counter_sum") \
+	X(shmem_lock, "shmem_lock") \
+	X(shmem_kernel_file_setup, "shmem_kernel_file_setup") \
+	X(shmem_unlock_mapping, "shmem_unlock_mapping") \
+	X(alloc_file_clone, "alloc_file_clone") \
+	X(__mm_populate, "__mm_populate") \
+	X(switch_task_namespaces, "switch_task_namespaces") \
+	X(inode_permission, "inode_permission") \
+	X(mnt_want_write, "mnt_want_write") \
+	X(mnt_drop_write, "mnt_drop_write") \
+	X(lookup_one_len, "lookup_one_len") \
+	X(get_tree_nodev, "get_tree_nodev") \
+	X(security_ipc_permission, "security_ipc_permission") \
+	X(security_mmap_file, "security_mmap_file") \
+	X(security_msg_msg_alloc, "security_msg_msg_alloc") \
+	X(security_msg_msg_free, "security_msg_msg_free") \
+	X(security_msg_queue_alloc, "security_msg_queue_alloc") \
+	X(security_msg_queue_free, "security_msg_queue_free") \
+	X(security_msg_queue_associate, "security_msg_queue_associate") \
+	X(security_msg_queue_msgctl, "security_msg_queue_msgctl") \
+	X(security_msg_queue_msgsnd, "security_msg_queue_msgsnd") \
+	X(security_msg_queue_msgrcv, "security_msg_queue_msgrcv") \
+	X(security_shm_alloc, "security_shm_alloc") \
+	X(security_shm_free, "security_shm_free") \
+	X(security_shm_associate, "security_shm_associate") \
+	X(security_shm_shmctl, "security_shm_shmctl") \
+	X(security_shm_shmat, "security_shm_shmat") \
+	X(security_sem_alloc, "security_sem_alloc") \
+	X(security_sem_free, "security_sem_free") \
+	X(security_sem_associate, "security_sem_associate") \
+	X(security_sem_semctl, "security_sem_semctl") \
+	X(security_sem_semop, "security_sem_semop") \
+	X(__audit_ipc_obj, "__audit_ipc_obj") \
+	X(__audit_ipc_set_perm, "__audit_ipc_set_perm") \
+	X(__audit_inode, "__audit_inode") \
+	X(__audit_file, "__audit_file") \
+	X(__audit_mq_open, "__audit_mq_open") \
+	X(__audit_mq_sendrecv, "__audit_mq_sendrecv") \
+	X(__audit_mq_notify, "__audit_mq_notify") \
+	X(__audit_mq_getsetattr, "__audit_mq_getsetattr") \
+	X(ucounts_get, "get_ucounts") \
+	X(ucounts_put, "put_ucounts") \
+	X(ucounts_inc_rlimit, "inc_rlimit_ucounts") \
+	X(ucounts_dec_rlimit, "dec_rlimit_ucounts") \
+	X(dentry_open, "dentry_open") \
+	X(do_send_sig_info, "do_send_sig_info") \
+	X(fc_mount, "fc_mount") \
+	X(mntget, "mntget") \
+	X(put_fs_context, "put_fs_context") \
+	X(free_ipcs, "free_ipcs") \
+	X(put_ipc_ns, "put_ipc_ns") \
+	X(pid_nr_ns, "pid_nr_ns") \
+	X(pid_vnr, "pid_vnr") \
+	X(proc_dointvec_minmax, "proc_dointvec_minmax") \
+	X(proc_doulongvec_minmax, "proc_doulongvec_minmax") \
+	X(register_kprobe, "register_kprobe") \
+	X(unregister_kprobe, "unregister_kprobe") \
+	X(kern_path, "kern_path") \
+	X(path_put, "path_put") \
+	X(d_set_d_op, "d_set_d_op") \
+	X(down_write_killable, "down_write_killable") \
+	X(radix_tree_tagged, "radix_tree_tagged") \
+	X(vfs_unlink, "vfs_unlink") \
+	X(unregister_sysctl_table, "unregister_sysctl_table") \
+	X(copy_ipcs, "copy_ipcs") \
+	X(d_splice_alias, "d_splice_alias") \
+	X(in_group_p, "in_group_p") \
+	X(ihold, "ihold") \
+	X(inc_nlink, "inc_nlink") \
+	X(drop_nlink, "drop_nlink") \
+	X(clear_inode, "clear_inode") \
+	X(d_instantiate, "d_instantiate") \
+	X(inode_init_once, "inode_init_once") \
+	X(simple_inode_init_ts, "simple_inode_init_ts") \
+	X(overflowgid_addr, "overflowgid") \
+	X(register_sysctl, "register_sysctl") \
+	X(text_start, "_text") \
+	X(text_end, "_end") \
+	X(kimage_voffset, "kimage_voffset") \
+	X(vmalloc_to_pfn, "vmalloc_to_pfn") \
+	X(set_fixmap, "__set_fixmap") \
+	X(init_user_ns, "init_user_ns") \
+	X(init_task, "init_task")
 
 extern struct droid_lkm_ksym droid_lkm_ks;
 

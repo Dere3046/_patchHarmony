@@ -37,6 +37,12 @@
 #include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include "ds_nsops.h"
+
+/* for_each_process_thread embeds &init_task, a trimmed image may not export it */
+#define droid_lkm_for_each_process_thread(p, t)				\
+	for ((p) = droid_lkm_ks.init_task;				\
+	     ((p) = next_task(p)) != droid_lkm_ks.init_task; )		\
+		for_each_thread(p, t)
 #include "ds_pidns.h"
 #include "ipc_sysctl.h"
 
@@ -267,7 +273,7 @@ bool droid_lkm_any_task_ns_refs(void)
 	bool found = false;
 
 	rcu_read_lock();
-	for_each_process_thread(p, t) {
+	droid_lkm_for_each_process_thread(p, t) {
 		struct pid_namespace *pns = NULL;
 		struct ipc_namespace *ins = NULL;
 
@@ -294,7 +300,7 @@ void droid_lkm_reset_task_ns_refs(void)
 	struct task_struct *p, *t;
 
 	rcu_read_lock();
-	for_each_process_thread(p, t) {
+	droid_lkm_for_each_process_thread(p, t) {
 		struct pid_namespace *pns = NULL;
 		struct ipc_namespace *ins = NULL;
 

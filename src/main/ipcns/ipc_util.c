@@ -46,6 +46,7 @@
 
 #include <linux/mm.h>
 #include "ds_ipc_compat.h"
+#include "ds_ksym.h"
 #include "ds_ipcns.h"
 #include <linux/shm.h>
 #include <linux/init.h>
@@ -652,10 +653,10 @@ int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flag)
 void kernel_to_ipc64_perm(struct kern_ipc_perm *in, struct ipc64_perm *out)
 {
 	out->key	= in->key;
-	out->uid	= from_kuid_munged(current_user_ns(), in->uid);
-	out->gid	= from_kgid_munged(current_user_ns(), in->gid);
-	out->cuid	= from_kuid_munged(current_user_ns(), in->cuid);
-	out->cgid	= from_kgid_munged(current_user_ns(), in->cgid);
+	out->uid	= from_kuid_munged(droid_lkm_current_user_ns(), in->uid);
+	out->gid	= from_kgid_munged(droid_lkm_current_user_ns(), in->gid);
+	out->cuid	= from_kuid_munged(droid_lkm_current_user_ns(), in->cuid);
+	out->cgid	= from_kgid_munged(droid_lkm_current_user_ns(), in->cgid);
 	out->mode	= in->mode;
 	out->seq	= in->seq;
 }
@@ -751,8 +752,8 @@ int ipcget(struct ipc_namespace *ns, struct ipc_ids *ids,
  */
 int ipc_update_perm(struct ipc64_perm *in, struct kern_ipc_perm *out)
 {
-	kuid_t uid = make_kuid(current_user_ns(), in->uid);
-	kgid_t gid = make_kgid(current_user_ns(), in->gid);
+	kuid_t uid = make_kuid(droid_lkm_current_user_ns(), in->uid);
+	kgid_t gid = make_kgid(droid_lkm_current_user_ns(), in->gid);
 	if (!uid_valid(uid) || !gid_valid(gid))
 		return -EINVAL;
 
