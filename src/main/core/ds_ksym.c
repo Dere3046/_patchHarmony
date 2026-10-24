@@ -45,7 +45,7 @@ struct user_namespace *droid_lkm_get_user_ns(struct user_namespace *ns)
 struct user_namespace *droid_lkm_current_user_ns(void)
 {
 #ifdef CONFIG_USER_NS
-	return current_cred()->user_ns;
+	return droid_lkm_task_cred(current)->user_ns;
 #else
 	return droid_lkm_ks.init_user_ns;
 #endif

@@ -22,9 +22,9 @@
 static inline refcount_t *droid_lkm_pidns_refcount(struct pid_namespace *ns)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
-	return &ns->ns.__ns_ref;
+	return &droid_lkm_pidns_ns(ns)->__ns_ref;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
-	return &ns->ns.count;
+	return &droid_lkm_pidns_ns(ns)->count;
 #else
 	return &ns->kref.refcount;
 #endif

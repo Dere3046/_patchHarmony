@@ -26,6 +26,7 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_PID_NS_UCOUNTS,
 	DROID_LKM_F_PID_NS_PID_ALLOCATED,
 	DROID_LKM_F_PID_NS_NS,
+	DROID_LKM_F_PID_NS_REBOOT,
 	DROID_LKM_F_NSPROXY_IPC_NS,
 	DROID_LKM_F_NSPROXY_PID_NS_FOR_CHILDREN,
 	DROID_LKM_F_NSPROXY_UTS_NS,
@@ -44,6 +45,7 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_TASK_SIGNAL,
 	DROID_LKM_F_TASK_SIGHAND,
 	DROID_LKM_F_TASK_MM,
+	DROID_LKM_F_TASK_FS,
 	DROID_LKM_F_TASK_FLAGS,
 	DROID_LKM_F_TASK_SE,
 	DROID_LKM_F_SEQ_FILE_BUF,
@@ -79,6 +81,7 @@ enum droid_lkm_field_id {
 // sizes needed to walk a flexible array
 enum droid_lkm_type_id {
 	DROID_LKM_T_UPID,
+	DROID_LKM_T_PID_NAMESPACE,
 	DROID_LKM_TYPE_COUNT
 };
 
@@ -88,6 +91,7 @@ void droid_lkm_layout_init(void);
 void droid_lkm_layout_report(void);
 bool droid_lkm_layout_trusted(void);
 void droid_lkm_layout_show(struct seq_file *m);
+u32 droid_lkm_pidns_size(void);
 
 // running kernel sizeof or 0 when refused
 u32 droid_lkm_layout_type_size(enum droid_lkm_type_id id);

@@ -26,6 +26,7 @@
  */
 
 #include <linux/slab.h>
+#include "ds.h"
 #include "ds_shapes.h"
 #include "ds_ipc_compat.h"
 #include "ds_ipcns.h"
@@ -1685,7 +1686,7 @@ long droid_lkm_do_shmat(int shmid, char __user *shmaddr, int shmflg,
 	if (err)
 		goto out_fput;
 
-	if (mmap_write_lock_killable(current->mm)) {
+	if (mmap_write_lock_killable(droid_lkm_task_mm(current))) {
 		err = -EINTR;
 		goto out_fput;
 	}
@@ -1695,7 +1696,8 @@ long droid_lkm_do_shmat(int shmid, char __user *shmaddr, int shmflg,
 		if (addr + size < addr)
 			goto invalid;
 
-		if (find_vma_intersection(current->mm, addr, addr + size))
+		if (find_vma_intersection(droid_lkm_task_mm(current),
+					     addr, addr + size))
 			goto invalid;
 	}
 
@@ -1705,7 +1707,7 @@ long droid_lkm_do_shmat(int shmid, char __user *shmaddr, int shmflg,
 	if (IS_ERR_VALUE(addr))
 		err = (long)addr;
 invalid:
-	mmap_write_unlock(current->mm);
+	mmap_write_unlock(droid_lkm_task_mm(current));
 	if (populate)
 		mm_populate(addr, populate);
 
@@ -1767,7 +1769,7 @@ COMPAT_SYSCALL_DEFINE3(shmat, int, shmid, compat_uptr_t, shmaddr, int, shmflg)
  */
 long ksys_shmdt(char __user *shmaddr)
 {
-	struct mm_struct *mm = current->mm;
+	struct mm_struct *mm = droid_lkm_task_mm(current);
 	struct vm_area_struct *vma;
 	unsigned long addr = (unsigned long)shmaddr;
 	int retval = -EINVAL;

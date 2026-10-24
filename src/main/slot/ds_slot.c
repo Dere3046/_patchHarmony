@@ -88,13 +88,14 @@ static bool droid_lkm_world_task(struct task_struct *t)
 	if (droid_lkm_pidns_is_ours(task_active_pid_ns(t)))
 		return true;
 
-	nsp = t->nsproxy;
+	nsp = droid_lkm_task_nsproxy(t);
 	if (!nsp)
 		return false;
-	if (droid_lkm_pidns_is_ours(nsp->pid_ns_for_children))
+	if (droid_lkm_pidns_is_ours(droid_lkm_nsproxy_pid_ns_for_children(nsp)))
 		return true;
 
-	if (droid_lkm_ipcns_is_ours(nsp->ipc_ns) && !droid_lkm_ipcns_is_host(nsp->ipc_ns))
+	if (droid_lkm_ipcns_is_ours(droid_lkm_nsproxy_ipc_ns(nsp)) &&
+	    !droid_lkm_ipcns_is_host(droid_lkm_nsproxy_ipc_ns(nsp)))
 		return true;
 	return false;
 }
@@ -103,14 +104,15 @@ static bool droid_lkm_is_droidspaces(void)
 {
 	const char *exe = NULL;
 
-	if ((current->flags & PF_KTHREAD) || !current->mm)
+	if ((droid_lkm_task_flags(current) & PF_KTHREAD) ||
+	    !droid_lkm_task_mm(current))
 		return false;
-	if (strncmp(current->comm, "droidspaces", 11) != 0 &&
-	    strcmp(current->comm, "[ds-monitor]") != 0)
+	if (strncmp(droid_lkm_task_comm(current), "droidspaces", 11) != 0 &&
+	    strcmp(droid_lkm_task_comm(current), "[ds-monitor]") != 0)
 		return false;
 
-	if (current->mm->exe_file)
-		exe = current->mm->exe_file->f_path.dentry->d_name.name;
+	if (droid_lkm_task_mm(current)->exe_file)
+		exe = droid_lkm_task_mm(current)->exe_file->f_path.dentry->d_name.name;
 	return exe && strstr(exe, "droidspaces") != NULL;
 }
 
@@ -460,15 +462,16 @@ static int droid_lkm_slot_install_pidns(void)
 		return PTR_ERR(ns);
 	}
 
-	if (!current->nsproxy) {
+	if (!droid_lkm_task_nsproxy(current)) {
 		droid_lkm_err("no nsproxy after unshare\n");
 		droid_lkm_pidns_put(ns);
 		return -EINVAL;
 	}
 
-	current->nsproxy->pid_ns_for_children = ns;
-	droid_lkm_info("pidns %p attached to %s[%d]\n", ns, current->comm,
-		current->pid);
+	droid_lkm_nsproxy_set_pid_ns_for_children(
+		droid_lkm_task_nsproxy(current), ns);
+	droid_lkm_info("pidns %p attached to %s[%d]\n", ns,
+		droid_lkm_task_comm(current), droid_lkm_task_pid(current));
 	return 0;
 }
 
@@ -482,15 +485,15 @@ static int droid_lkm_slot_install_ipcns(void)
 		return PTR_ERR(ns);
 	}
 
-	if (!current->nsproxy) {
+	if (!droid_lkm_task_nsproxy(current)) {
 		droid_lkm_err("no nsproxy after unshare\n");
 		droid_lkm_ipcns_put(ns);
 		return -EINVAL;
 	}
 
-	current->nsproxy->ipc_ns = ns;
-	droid_lkm_info("ipcns %p attached to %s[%d]\n", ns, current->comm,
-		current->pid);
+	droid_lkm_nsproxy_set_ipc_ns(droid_lkm_task_nsproxy(current), ns);
+	droid_lkm_info("ipcns %p attached to %s[%d]\n", ns,
+		droid_lkm_task_comm(current), droid_lkm_task_pid(current));
 	return 0;
 }
 
@@ -518,9 +521,11 @@ static void (*droid_lkm_exit_ns_orig)(struct task_struct *p);
 
 static void droid_lkm_nsproxy_hold(struct nsproxy *nsp)
 {
-	if (!nsp || !nsp->ipc_ns || !droid_lkm_ipcns_is_ours(nsp->ipc_ns))
+	if (!nsp || !droid_lkm_nsproxy_ipc_ns(nsp) ||
+	    !droid_lkm_ipcns_is_ours(droid_lkm_nsproxy_ipc_ns(nsp)))
 		return;
-	nsp->ipc_ns = droid_lkm_ipcns_get(nsp->ipc_ns);
+	droid_lkm_nsproxy_set_ipc_ns(nsp,
+		droid_lkm_ipcns_get(droid_lkm_nsproxy_ipc_ns(nsp)));
 }
 
 static void droid_lkm_nsproxy_drop(struct ipc_namespace *ipc)
@@ -546,12 +551,12 @@ static __nocfi noinline void droid_lkm_nsproxy_switch_run(struct task_struct *p,
 							 void (*fn)(struct task_struct *,
 								    struct nsproxy *))
 {
-	struct nsproxy *old = p->nsproxy;
+	struct nsproxy *old = droid_lkm_task_nsproxy(p);
 	struct ipc_namespace *ipc = NULL;
 	bool last = droid_lkm_nsproxy_last(old);
 
 	if (last)
-		ipc = old->ipc_ns;
+		ipc = droid_lkm_nsproxy_ipc_ns(old);
 	fn(p, new);
 	if (last)
 		droid_lkm_nsproxy_drop(ipc);
@@ -566,12 +571,12 @@ DROID_LKM_ENTRY __nocfi noinline void droid_lkm_switch_wrap(struct task_struct *
 
 DROID_LKM_ENTRY __nocfi noinline void droid_lkm_exit_ns_wrap(struct task_struct *p)
 {
-	struct nsproxy *old = p->nsproxy;
+	struct nsproxy *old = droid_lkm_task_nsproxy(p);
 	struct ipc_namespace *ipc = NULL;
 	bool last = droid_lkm_nsproxy_last(old);
 
 	if (last)
-		ipc = old->ipc_ns;
+		ipc = droid_lkm_nsproxy_ipc_ns(old);
 	droid_lkm_exit_ns_orig(p);
 	ds_hook_leave(&droid_lkm_exit_ns_hook);
 	if (last)
@@ -656,11 +661,12 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 	if (want_pid) {
 		struct pid_namespace *old;
 
-		if (!tsk->nsproxy) {
+		if (!droid_lkm_task_nsproxy(tsk)) {
 			ds_hook_leave(&droid_lkm_cnn_hook);
 			return ERR_PTR(-EINVAL);
 		}
-		old = tsk->nsproxy->pid_ns_for_children;
+		old = droid_lkm_nsproxy_pid_ns_for_children(
+				droid_lkm_task_nsproxy(tsk));
 
 		if (task_active_pid_ns(current) != old) {
 			ds_hook_leave(&droid_lkm_cnn_hook);
@@ -696,9 +702,9 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 	}
 
 	if (want_pid)
-		nsp->pid_ns_for_children = new_pid;
+		droid_lkm_nsproxy_set_pid_ns_for_children(nsp, new_pid);
 	if (want_ipc)
-		nsp->ipc_ns = new_ipc;
+		droid_lkm_nsproxy_set_ipc_ns(nsp, new_ipc);
 	else
 		droid_lkm_nsproxy_hold(nsp);
 
@@ -734,7 +740,7 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 		int ret = droid_lkm_cn_call(flags, tsk);
 
 		if (!ret)
-			droid_lkm_nsproxy_hold(tsk->nsproxy);
+			droid_lkm_nsproxy_hold(droid_lkm_task_nsproxy(tsk));
 		return ret;
 	}
 
@@ -745,7 +751,7 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 		int ret = droid_lkm_cn_call(flags, tsk);
 
 		if (!ret)
-			droid_lkm_nsproxy_hold(tsk->nsproxy);
+			droid_lkm_nsproxy_hold(droid_lkm_task_nsproxy(tsk));
 		return ret;
 	}
 
@@ -756,11 +762,12 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	if (want_pid) {
 		struct pid_namespace *old;
 
-		if (!tsk->nsproxy) {
+		if (!droid_lkm_task_nsproxy(tsk)) {
 			ds_hook_leave(&droid_lkm_cn_hook);
 			return -EINVAL;
 		}
-		old = tsk->nsproxy->pid_ns_for_children;
+		old = droid_lkm_nsproxy_pid_ns_for_children(
+				droid_lkm_task_nsproxy(tsk));
 
 		if (task_active_pid_ns(current) != old) {
 			ds_hook_leave(&droid_lkm_cn_hook);
@@ -790,7 +797,7 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	}
 
 	if (!(inner & DROID_LKM_NS_FLAGS)) {
-		priv = droid_lkm_cnn_orig(0, tsk, droid_lkm_current_user_ns(), tsk->fs);
+		priv = droid_lkm_cnn_orig(0, tsk, droid_lkm_current_user_ns(), droid_lkm_task_fs(tsk));
 		if (IS_ERR(priv)) {
 			droid_lkm_pidns_put(new_pid);
 			droid_lkm_ipcns_put(new_ipc);
@@ -800,14 +807,15 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	}
 
 	if (want_pid)
-		tsk->nsproxy->pid_ns_for_children = new_pid;
+		droid_lkm_nsproxy_set_pid_ns_for_children(
+			droid_lkm_task_nsproxy(tsk), new_pid);
 	if (want_ipc)
-		tsk->nsproxy->ipc_ns = new_ipc;
+		droid_lkm_nsproxy_set_ipc_ns(droid_lkm_task_nsproxy(tsk), new_ipc);
 	else
-		droid_lkm_nsproxy_hold(tsk->nsproxy);
+		droid_lkm_nsproxy_hold(droid_lkm_task_nsproxy(tsk));
 
 	droid_lkm_dbg("clone ns: flags=0x%lx pid=%d ipc=%d -> %p\n", flags,
-	       (int)want_pid, (int)want_ipc, tsk->nsproxy);
+	       (int)want_pid, (int)want_ipc, droid_lkm_task_nsproxy(tsk));
 	return 0;
 }
 
@@ -831,9 +839,10 @@ static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 	    !ns_capable(droid_lkm_current_user_ns(), CAP_SYS_ADMIN))
 		return false;
 
-	if ((flags & CLONE_NEWPID) && current->nsproxy &&
+	if ((flags & CLONE_NEWPID) && droid_lkm_task_nsproxy(current) &&
 	    task_active_pid_ns(current) !=
-		    current->nsproxy->pid_ns_for_children)
+		    droid_lkm_nsproxy_pid_ns_for_children(
+			    droid_lkm_task_nsproxy(current)))
 		return false;
 
 	return true;
@@ -882,18 +891,18 @@ static __nocfi noinline long droid_lkm_sys_unshare(const struct pt_regs *regs)
 
 	if (!droid_lkm_gate_allow()) {
 		droid_lkm_dbg("unshare: %s[%d] flags=0x%lx NOT ours -> kernel\n",
-		       current->comm, current->pid, flags);
+		       droid_lkm_task_comm(current), droid_lkm_task_pid(current), flags);
 		return droid_lkm_orig_unshare(regs);
 	}
 
 	if (droid_lkm_no_fake_ns) {
 		droid_lkm_warn("no_fake_ns=1: %s[%d] unshare flags=0x%lx -> fake success (nothing attached)\n",
-			current->comm, current->pid, flags);
+			droid_lkm_task_comm(current), droid_lkm_task_pid(current), flags);
 		return 0;
 	}
 
 	droid_lkm_dbg("unshare: %s[%d] flags=0x%lx pid=%d ipc=%d sysvsem=%d wrap=%d\n",
-	       current->comm, current->pid, flags, !!(flags & CLONE_NEWPID),
+	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), flags, !!(flags & CLONE_NEWPID),
 	       !!(flags & CLONE_NEWIPC), !!(flags & CLONE_SYSVSEM),
 	       (int)droid_lkm_cnn_hooked);
 
@@ -990,9 +999,10 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 	if (want_pid) {
 		struct pid_namespace *old;
 
-		if (!current->nsproxy)
+		if (!droid_lkm_task_nsproxy(current))
 			return -EINVAL;
-		old = current->nsproxy->pid_ns_for_children;
+		old = droid_lkm_nsproxy_pid_ns_for_children(
+				droid_lkm_task_nsproxy(current));
 
 		if (task_active_pid_ns(current) != old)
 			return -EINVAL;
@@ -1010,7 +1020,7 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 	}
 
 	ctx->priv = droid_lkm_cnn_orig(0, current, droid_lkm_current_user_ns(),
-				       current->fs);
+				       droid_lkm_task_fs(current));
 	if (IS_ERR(ctx->priv)) {
 		droid_lkm_pidns_put(new_pid);
 		droid_lkm_ipcns_put(new_ipc);
@@ -1018,12 +1028,13 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 	}
 
 	droid_lkm_ks.switch_task_namespaces(current, ctx->priv);
-	ctx->save_pid = (unsigned long)ctx->priv->pid_ns_for_children;
-	ctx->save_ipc = (unsigned long)ctx->priv->ipc_ns;
+	ctx->save_pid = (unsigned long)
+		droid_lkm_nsproxy_pid_ns_for_children(ctx->priv);
+	ctx->save_ipc = (unsigned long)droid_lkm_nsproxy_ipc_ns(ctx->priv);
 	if (want_pid)
-		ctx->priv->pid_ns_for_children = new_pid;
+		droid_lkm_nsproxy_set_pid_ns_for_children(ctx->priv, new_pid);
 	if (want_ipc && new_ipc)
-		ctx->priv->ipc_ns = new_ipc;
+		droid_lkm_nsproxy_set_ipc_ns(ctx->priv, new_ipc);
 	return 0;
 }
 
@@ -1034,16 +1045,20 @@ __nocfi noinline void droid_lkm_clone_ctx_leave(struct droid_lkm_clone_ctx *ctx)
 	if (!ctx->priv)
 		return;
 
-	priv2 = droid_lkm_cnn_orig(0, current, droid_lkm_current_user_ns(), current->fs);
+	priv2 = droid_lkm_cnn_orig(0, current, droid_lkm_current_user_ns(), droid_lkm_task_fs(current));
 	if (IS_ERR(priv2)) {
-		current->nsproxy->pid_ns_for_children =
-			(struct pid_namespace *)ctx->save_pid;
-		current->nsproxy->ipc_ns = (struct ipc_namespace *)ctx->save_ipc;
+		droid_lkm_nsproxy_set_pid_ns_for_children(
+			droid_lkm_task_nsproxy(current),
+			(struct pid_namespace *)ctx->save_pid);
+		droid_lkm_nsproxy_set_ipc_ns(droid_lkm_task_nsproxy(current),
+			(struct ipc_namespace *)ctx->save_ipc);
 		return;
 	}
 
-	priv2->pid_ns_for_children = (struct pid_namespace *)ctx->save_pid;
-	priv2->ipc_ns = (struct ipc_namespace *)ctx->save_ipc;
+	droid_lkm_nsproxy_set_pid_ns_for_children(priv2,
+		(struct pid_namespace *)ctx->save_pid);
+	droid_lkm_nsproxy_set_ipc_ns(priv2,
+		(struct ipc_namespace *)ctx->save_ipc);
 	droid_lkm_nsproxy_switch(current, priv2);
 }
 

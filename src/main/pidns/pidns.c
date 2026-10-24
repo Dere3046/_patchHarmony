@@ -41,8 +41,8 @@
 /* for_each_process_thread embeds &init_task, a trimmed image may not export it */
 #define droid_lkm_for_each_process_thread(p, t)				\
 	for ((p) = droid_lkm_ks.init_task;				\
-	     ((p) = next_task(p)) != droid_lkm_ks.init_task; )		\
-		for_each_thread(p, t)
+	     ((p) = droid_lkm_next_task(p)) != droid_lkm_ks.init_task; )	\
+		for ((t) = (p); (t); (t) = NULL)
 #include "ds_pidns.h"
 #include "ipc_sysctl.h"
 
@@ -83,7 +83,8 @@ static struct kprobe droid_lkm_kp_do_exit;
 
 static struct pid_namespace *to_pid_ns(struct ns_common *ns)
 {
-	return container_of(ns, struct pid_namespace, ns);
+	return (struct pid_namespace *)((char *)ns -
+		droid_lkm_layout_off(DROID_LKM_F_PID_NS_NS));
 }
 
 static struct kmem_cache *droid_lkm_create_pid_cachep(unsigned int level)
@@ -152,7 +153,7 @@ __nocfi noinline struct pid_namespace *droid_lkm_pidns_create(struct pid_namespa
 	if (!parent)
 		parent = &init_pid_ns;
 
-	level = parent->level + 1;
+	level = droid_lkm_pidns_level(parent) + 1;
 	if (level > MAX_PID_NS_LEVEL)
 		return ERR_PTR(-ENOSPC);
 
@@ -160,22 +161,23 @@ __nocfi noinline struct pid_namespace *droid_lkm_pidns_create(struct pid_namespa
 	if (!ns)
 		return ERR_PTR(-ENOMEM);
 
-	idr_init(&ns->idr);
+	idr_init(droid_lkm_pidns_idr(ns));
 
-	ns->pid_cachep = droid_lkm_create_pid_cachep(level);
-	if (!ns->pid_cachep) {
+	droid_lkm_pidns_set_pid_cachep(ns, droid_lkm_create_pid_cachep(level));
+	if (!droid_lkm_pidns_pid_cachep(ns)) {
 		err = -ENOMEM;
 		goto out_idr;
 	}
 
-	err = droid_lkm_ks.proc_alloc_inum(&ns->ns.inum);
+	err = droid_lkm_ks.proc_alloc_inum(&droid_lkm_pidns_ns(ns)->inum);
 	if (err)
 		goto out_idr;
 
-	droid_lkm_ns_set_ops(&ns->ns, &droid_lkm_pidns_ops, CLONE_NEWPID);
+	droid_lkm_ns_set_ops(droid_lkm_pidns_ns(ns), &droid_lkm_pidns_ops,
+			     CLONE_NEWPID);
 	refcount_set(droid_lkm_pidns_refcount(ns), 1);
-	ns->level = level;
-	ns->parent = parent;
+	droid_lkm_pidns_set_level(ns, level);
+	droid_lkm_pidns_set_parent(ns, parent);
 	/*
 	 * Ownership follows the creating task's user namespace, so ns_capable()
 	 * on this namespace is correct whether or not the userns module is
@@ -183,9 +185,9 @@ __nocfi noinline struct pid_namespace *droid_lkm_pidns_create(struct pid_namespa
 	 * kernel destroy path, and the userns module clears this field before it
 	 * releases a user namespace.
 	 */
-	ns->user_ns = current_cred()->user_ns;
-	ns->ucounts = NULL;
-	ns->pid_allocated = PIDNS_ADDING;
+	droid_lkm_pidns_set_user_ns(ns, droid_lkm_task_cred(current)->user_ns);
+	droid_lkm_pidns_set_ucounts(ns, NULL);
+	droid_lkm_pidns_set_pid_allocated(ns, PIDNS_ADDING);
 
 	e = kzalloc(sizeof(*e), GFP_KERNEL);
 	if (!e) {
@@ -200,13 +202,14 @@ __nocfi noinline struct pid_namespace *droid_lkm_pidns_create(struct pid_namespa
 	list_add_tail(&e->node, &droid_lkm_pidns_list);
 	spin_unlock_irq(&droid_lkm_pidns_lock);
 
-	droid_lkm_dbg("pidns %p created level=%u inum=%u\n", ns, level, ns->ns.inum);
+	droid_lkm_dbg("pidns %p created level=%u inum=%u\n", ns, level,
+		      droid_lkm_pidns_ns(ns)->inum);
 	return ns;
 
 out_inum:
-	droid_lkm_ks.proc_free_inum(ns->ns.inum);
+	droid_lkm_ks.proc_free_inum(droid_lkm_pidns_ns(ns)->inum);
 out_idr:
-	idr_destroy(&ns->idr);
+	idr_destroy(droid_lkm_pidns_idr(ns));
 	kmem_cache_free(droid_lkm_pidns_cachep, ns);
 	return ERR_PTR(err);
 }
@@ -215,8 +218,9 @@ struct pid_namespace *droid_lkm_pidns_create_for_current(void)
 {
 	struct pid_namespace *parent = NULL;
 
-	if (current->nsproxy)
-		parent = current->nsproxy->pid_ns_for_children;
+	if (droid_lkm_task_nsproxy(current))
+		parent = droid_lkm_nsproxy_pid_ns_for_children(
+				droid_lkm_task_nsproxy(current));
 	if (!droid_lkm_pidns_is_ours(parent))
 		parent = &init_pid_ns;
 
@@ -242,8 +246,9 @@ struct pid_namespace *droid_lkm_pidns_task_for_children(struct task_struct *task
 	struct pid_namespace *ns = NULL;
 
 	task_lock(task);
-	if (task->nsproxy)
-		ns = task->nsproxy->pid_ns_for_children;
+	if (droid_lkm_task_nsproxy(task))
+		ns = droid_lkm_nsproxy_pid_ns_for_children(
+				droid_lkm_task_nsproxy(task));
 	task_unlock(task);
 
 	return ns;
@@ -257,7 +262,7 @@ bool droid_lkm_pidns_busy(void)
 
 	spin_lock_irqsave(&droid_lkm_pidns_lock, flags);
 	list_for_each_entry(e, &droid_lkm_pidns_list, node) {
-		if (!idr_is_empty(&e->ns->idr)) {
+		if (!idr_is_empty(droid_lkm_pidns_idr(e->ns))) {
 			busy = true;
 			break;
 		}
@@ -272,24 +277,29 @@ bool droid_lkm_any_task_ns_refs(void)
 	struct task_struct *p, *t;
 	bool found = false;
 
+	if (!droid_lkm_layout_trusted())
+		return false;
+
 	rcu_read_lock();
 	droid_lkm_for_each_process_thread(p, t) {
 		struct pid_namespace *pns = NULL;
 		struct ipc_namespace *ins = NULL;
 
 		task_lock(t);
-		if (t->nsproxy) {
-			pns = t->nsproxy->pid_ns_for_children;
-			ins = t->nsproxy->ipc_ns;
+		if (droid_lkm_task_nsproxy(t)) {
+			pns = droid_lkm_nsproxy_pid_ns_for_children(
+					droid_lkm_task_nsproxy(t));
+			ins = droid_lkm_nsproxy_ipc_ns(droid_lkm_task_nsproxy(t));
 		}
 		task_unlock(t);
 
 		if (droid_lkm_pidns_is_ours(pns) ||
 		    (droid_lkm_ipcns_is_ours(ins) && !droid_lkm_ipcns_is_host(ins))) {
 			found = true;
-			break;
+			goto out;
 		}
 	}
+out:
 	rcu_read_unlock();
 
 	return found;
@@ -299,15 +309,19 @@ void droid_lkm_reset_task_ns_refs(void)
 {
 	struct task_struct *p, *t;
 
+	if (!droid_lkm_layout_trusted())
+		return;
+
 	rcu_read_lock();
 	droid_lkm_for_each_process_thread(p, t) {
 		struct pid_namespace *pns = NULL;
 		struct ipc_namespace *ins = NULL;
 
 		task_lock(t);
-		if (t->nsproxy) {
-			pns = t->nsproxy->pid_ns_for_children;
-			ins = t->nsproxy->ipc_ns;
+		if (droid_lkm_task_nsproxy(t)) {
+			pns = droid_lkm_nsproxy_pid_ns_for_children(
+					droid_lkm_task_nsproxy(t));
+			ins = droid_lkm_nsproxy_ipc_ns(droid_lkm_task_nsproxy(t));
 		}
 		task_unlock(t);
 
@@ -315,13 +329,18 @@ void droid_lkm_reset_task_ns_refs(void)
 			continue;
 
 		task_lock(t);
-		if (t->nsproxy) {
-			if (droid_lkm_pidns_is_ours(t->nsproxy->pid_ns_for_children)) {
-				droid_lkm_pidns_put(t->nsproxy->pid_ns_for_children);
-				t->nsproxy->pid_ns_for_children = &init_pid_ns;
+		if (droid_lkm_task_nsproxy(t)) {
+			struct nsproxy *nsp = droid_lkm_task_nsproxy(t);
+
+			if (droid_lkm_pidns_is_ours(
+				    droid_lkm_nsproxy_pid_ns_for_children(nsp))) {
+				droid_lkm_pidns_put(
+					droid_lkm_nsproxy_pid_ns_for_children(nsp));
+				droid_lkm_nsproxy_set_pid_ns_for_children(
+					nsp, &init_pid_ns);
 			}
-			if (droid_lkm_ipcns_is_ours(t->nsproxy->ipc_ns))
-				t->nsproxy->ipc_ns = NULL;
+			if (droid_lkm_ipcns_is_ours(droid_lkm_nsproxy_ipc_ns(nsp)))
+				droid_lkm_nsproxy_set_ipc_ns(nsp, NULL);
 		}
 		task_unlock(t);
 	}
@@ -373,7 +392,7 @@ static struct ns_common *droid_lkm_pidns_get_active(struct task_struct *task)
 	ns = droid_lkm_pidns_get(task_active_pid_ns(task));
 	rcu_read_unlock();
 
-	return ns ? &ns->ns : NULL;
+	return ns ? droid_lkm_pidns_ns(ns) : NULL;
 }
 
 static struct ns_common *droid_lkm_pidns_get_for_children(struct task_struct *task)
@@ -381,20 +400,21 @@ static struct ns_common *droid_lkm_pidns_get_for_children(struct task_struct *ta
 	struct pid_namespace *ns = NULL;
 
 	task_lock(task);
-	if (task->nsproxy)
-		ns = droid_lkm_pidns_get(task->nsproxy->pid_ns_for_children);
+	if (droid_lkm_task_nsproxy(task))
+		ns = droid_lkm_pidns_get(droid_lkm_nsproxy_pid_ns_for_children(
+					 droid_lkm_task_nsproxy(task)));
 	task_unlock(task);
 
 	/*
 	 * upstream refuses to hand out a namespace whose reaper is gone
 	 * (pidns_for_children_get), so a dead namespace reads as ENOENT
 	 */
-	if (ns && !READ_ONCE(ns->child_reaper)) {
+	if (ns && !droid_lkm_pidns_child_reaper(ns)) {
 		droid_lkm_pidns_put(ns);
 		ns = NULL;
 	}
 
-	return ns ? &ns->ns : NULL;
+	return ns ? droid_lkm_pidns_ns(ns) : NULL;
 }
 
 static void droid_lkm_pidns_put_common(struct ns_common *ns)
@@ -408,19 +428,21 @@ static int droid_lkm_pidns_install(struct nsset *nsset, struct ns_common *ns)
 	struct pid_namespace *active = task_active_pid_ns(current);
 	struct pid_namespace *ancestor, *new = to_pid_ns(ns);
 
-	droid_lkm_dbg("setns(pid): %s[%d] active=%p -> ns=%p level=%u\n", current->comm,
-	       current->pid, active, new, new->level);
+	droid_lkm_dbg("setns(pid): %s[%d] active=%p -> ns=%p level=%u\n",
+	       droid_lkm_task_comm(current), droid_lkm_task_pid(current),
+	       active, new, droid_lkm_pidns_level(new));
 
-	if (!ns_capable(new->user_ns, CAP_SYS_ADMIN) ||
+	if (!ns_capable(droid_lkm_pidns_user_ns(new), CAP_SYS_ADMIN) ||
 	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if (new->level < active->level)
+	if (droid_lkm_pidns_level(new) < droid_lkm_pidns_level(active))
 		return -EINVAL;
 
 	ancestor = new;
-	while (ancestor->level > active->level)
-		ancestor = ancestor->parent;
+	while (droid_lkm_pidns_level(ancestor) >
+	       droid_lkm_pidns_level(active))
+		ancestor = droid_lkm_pidns_parent(ancestor);
 	if (ancestor != active)
 		return -EINVAL;
 
@@ -432,7 +454,7 @@ static int droid_lkm_pidns_install(struct nsset *nsset, struct ns_common *ns)
 	 * droid_lkm_pidns_get_active()/put_common(), and live use is tracked
 	 * through the ns idr plus droid_lkm_any_task_ns_refs().
 	 */
-	nsproxy->pid_ns_for_children = new;
+	droid_lkm_nsproxy_set_pid_ns_for_children(nsproxy, new);
 	return 0;
 }
 
@@ -441,22 +463,22 @@ static struct ns_common *droid_lkm_pidns_get_parent(struct ns_common *ns)
 	struct pid_namespace *active = task_active_pid_ns(current);
 	struct pid_namespace *pid_ns, *p;
 
-	pid_ns = p = to_pid_ns(ns)->parent;
+	pid_ns = p = droid_lkm_pidns_parent(to_pid_ns(ns));
 	for (;;) {
 		if (!p)
 			return ERR_PTR(-EPERM);
 		if (p == active)
 			break;
-		p = p->parent;
+		p = droid_lkm_pidns_parent(p);
 	}
 
 	pid_ns = droid_lkm_pidns_get(pid_ns);
-	return pid_ns ? &pid_ns->ns : ERR_PTR(-ENOMEM);
+	return pid_ns ? droid_lkm_pidns_ns(pid_ns) : ERR_PTR(-ENOMEM);
 }
 
 static struct user_namespace *droid_lkm_pidns_owner(struct ns_common *ns)
 {
-	return to_pid_ns(ns)->user_ns;
+	return droid_lkm_pidns_user_ns(to_pid_ns(ns));
 }
 
 const struct proc_ns_operations droid_lkm_pidns_ops = {
@@ -489,21 +511,22 @@ int droid_lkm_pidns_reboot(struct pid_namespace *ns, int cmd)
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART2:
 	case LINUX_REBOOT_CMD_RESTART:
-		ns->reboot = SIGHUP;
+		droid_lkm_pidns_set_reboot(ns, SIGHUP);
 		break;
 	case LINUX_REBOOT_CMD_POWER_OFF:
 	case LINUX_REBOOT_CMD_HALT:
-		ns->reboot = SIGINT;
+		droid_lkm_pidns_set_reboot(ns, SIGINT);
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	if (ns->child_reaper) {
+	if (droid_lkm_pidns_child_reaper(ns)) {
+		struct task_struct *reaper = droid_lkm_pidns_child_reaper(ns);
 
-		send_sig(SIGKILL, ns->child_reaper, 1);
-		droid_lkm_info("pidns %p reboot=%d, reaper %d killed\n", ns, ns->reboot,
-			ns->child_reaper->pid);
+		send_sig(SIGKILL, reaper, 1);
+		droid_lkm_info("pidns %p reboot=%d, reaper %d killed\n", ns,
+			droid_lkm_pidns_reboot_value(ns), droid_lkm_task_pid(reaper));
 	}
 	return 0;
 }
@@ -516,7 +539,8 @@ static __nocfi noinline void droid_lkm_pidns_do_zap(struct pid_namespace *ns)
 	int rounds;
 	long rc;
 
-	droid_lkm_dbg("zap begin ns=%p allocated=%u\n", ns, ns->pid_allocated);
+	droid_lkm_dbg("zap begin ns=%p allocated=%u\n", ns,
+		      droid_lkm_pidns_pid_allocated(ns));
 
 	droid_lkm_ks.disable_pid_allocation(ns);
 
@@ -528,7 +552,7 @@ static __nocfi noinline void droid_lkm_pidns_do_zap(struct pid_namespace *ns)
 	 */
 	if (droid_lkm_ks_tasklist_lock)
 		read_lock(droid_lkm_ks_tasklist_lock);
-	idr_for_each_entry_continue(&ns->idr, pid, nr) {
+	idr_for_each_entry_continue(droid_lkm_pidns_idr(ns), pid, nr) {
 		task = pid_task(pid, PIDTYPE_PID);
 		if (task && !__fatal_signal_pending(task))
 			droid_lkm_ks.group_send_sig_info(SIGKILL, SEND_SIG_PRIV, task,
@@ -543,22 +567,26 @@ static __nocfi noinline void droid_lkm_pidns_do_zap(struct pid_namespace *ns)
 	} while (rc != -ECHILD);
 
 	for (rounds = 0; rounds < 500; rounds++) {
-		if (READ_ONCE(ns->pid_allocated) == 0)
+		if (droid_lkm_pidns_pid_allocated(ns) == 0)
 			break;
 		msleep(10);
 	}
 
 	droid_lkm_dbg("zap done ns=%p allocated=%u after %d rounds\n", ns,
-		ns->pid_allocated, rounds);
+		droid_lkm_pidns_pid_allocated(ns), rounds);
 }
 
 static int droid_lkm_zap_fn(void *unused)
 {
 	struct droid_lkm_pidns_entry *e;
 
-	spin_lock_irq(&current->sighand->siglock);
-	current->sighand->action[SIGCHLD - 1].sa.sa_handler = SIG_IGN;
-	spin_unlock_irq(&current->sighand->siglock);
+	{
+		struct sighand_struct *sighand = droid_lkm_task_sighand(current);
+
+		spin_lock_irq(&sighand->siglock);
+		sighand->action[SIGCHLD - 1].sa.sa_handler = SIG_IGN;
+		spin_unlock_irq(&sighand->siglock);
+	}
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible_timeout(droid_lkm_zap_wq,
@@ -627,19 +655,21 @@ static __nocfi noinline int droid_lkm_do_exit_pre(struct kprobe *p, struct pt_re
 	if (!droid_lkm_pidns_is_ours(ns))
 		return 0;
 
-	droid_lkm_dbg("do_exit: %s[%d] ns=%p reaper=%d\n", current->comm,
-	       current->pid, ns, ns->child_reaper == current);
+	droid_lkm_dbg("do_exit: %s[%d] ns=%p reaper=%d\n",
+	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), ns,
+	       droid_lkm_pidns_child_reaper(ns) == current);
 
-	if (ns->child_reaper != current)
+	if (droid_lkm_pidns_child_reaper(ns) != current)
 		return 0;
 
 	droid_lkm_ks.disable_pid_allocation(ns);
 
 	if (droid_lkm_reaper_task)
-		ns->child_reaper = droid_lkm_reaper_task;
+		droid_lkm_pidns_set_child_reaper(ns, droid_lkm_reaper_task);
 
-	if (ns->reboot)
-		current->signal->group_exit_code = ns->reboot;
+	if (droid_lkm_pidns_reboot_value(ns))
+		droid_lkm_task_signal(current)->group_exit_code =
+			droid_lkm_pidns_reboot_value(ns);
 
 	droid_lkm_pidns_queue_zap(ns);
 	return 0;
@@ -649,7 +679,7 @@ static __nocfi noinline int droid_lkm_do_exit_pre(struct kprobe *p, struct pt_re
 int droid_lkm_pidns_init(void)
 {
 	droid_lkm_pidns_cachep = kmem_cache_create("droid_lkm_pid_namespace",
-					    sizeof(struct pid_namespace),
+					    droid_lkm_pidns_size(),
 					    __alignof__(struct pid_namespace),
 					    SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT, NULL);
 	if (!droid_lkm_pidns_cachep) {
@@ -703,7 +733,8 @@ int droid_lkm_pidns_init(void)
 	}
 
 out:
-	droid_lkm_info("pidns ready (reaper=%d)\n", droid_lkm_reaper_task->pid);
+	droid_lkm_info("pidns ready (reaper=%d)\n",
+			 droid_lkm_task_pid(droid_lkm_reaper_task));
 	return 0;
 }
 
@@ -722,7 +753,8 @@ static void droid_lkm_pidns_retire_reapers(void)
 
 	spin_lock_irqsave(&droid_lkm_pidns_lock, flags);
 	list_for_each_entry(e, &droid_lkm_pidns_list, node)
-		e->ns->child_reaper = droid_lkm_pidns_retire_reaper;
+		droid_lkm_pidns_set_child_reaper(e->ns,
+						droid_lkm_pidns_retire_reaper);
 	spin_unlock_irqrestore(&droid_lkm_pidns_lock, flags);
 }
 
@@ -762,23 +794,27 @@ __nocfi noinline void droid_lkm_pidns_exit(void)
 		list_del_init(&e->node);
 		spin_unlock_irqrestore(&droid_lkm_pidns_lock, flags);
 
-		if (droid_lkm_ns_stashed(&e->ns->ns) ||
+		if (droid_lkm_ns_stashed(droid_lkm_pidns_ns(e->ns)) ||
 		    refcount_read(droid_lkm_pidns_refcount(e->ns)) > 1 ||
-		    !idr_is_empty(&e->ns->idr)) {
+		    !idr_is_empty(droid_lkm_pidns_idr(e->ns))) {
 
 			droid_lkm_warn("pidns %p neutralized+leaked (stashed=%p count=%d)\n",
-				e->ns, droid_lkm_ns_stash_ptr(&e->ns->ns),
+				e->ns, droid_lkm_ns_stash_ptr(
+					droid_lkm_pidns_ns(e->ns)),
 				refcount_read(droid_lkm_pidns_refcount(e->ns)));
-			e->ns->child_reaper = droid_lkm_pidns_retire_reaper;
-			droid_lkm_ns_neutralize(&e->ns->ns, droid_lkm_pidns_neutral_ops);
+			droid_lkm_pidns_set_child_reaper(
+				e->ns, droid_lkm_pidns_retire_reaper);
+			droid_lkm_ns_neutralize(droid_lkm_pidns_ns(e->ns),
+						droid_lkm_pidns_neutral_ops);
 			leaked++;
 			caches_clean = false;
 			continue;
 		}
 
-		idr_destroy(&e->ns->idr);
-		if (e->ns->ns.inum)
-			droid_lkm_ks.proc_free_inum(e->ns->ns.inum);
+		idr_destroy(droid_lkm_pidns_idr(e->ns));
+		if (droid_lkm_pidns_ns(e->ns)->inum)
+			droid_lkm_ks.proc_free_inum(
+				droid_lkm_pidns_ns(e->ns)->inum);
 		kmem_cache_free(droid_lkm_pidns_cachep, e->ns);
 		kfree(e);
 	}
@@ -826,20 +862,21 @@ static int droid_lkm_pidns_ns_last_pid(DROID_LKM_CTL_TABLE *table, int write,
 		return -ENOENT;
 
 	/* the owner of the namespace authorizes the write, as upstream does */
-	if (write && (!ns->user_ns ||
-		      !ns_capable(ns->user_ns, CAP_CHECKPOINT_RESTORE)))
+	if (write && (!droid_lkm_pidns_user_ns(ns) ||
+		      !ns_capable(droid_lkm_pidns_user_ns(ns),
+				  CAP_CHECKPOINT_RESTORE)))
 		return -EPERM;
 
 	/*
 	 * the cursor is volatile in a live namespace and writers are expected to
 	 * serialize among themselves, so no lock is taken here
 	 */
-	next = READ_ONCE(ns->idr.idr_next) - 1;
+	next = READ_ONCE(droid_lkm_pidns_idr(ns)->idr_next) - 1;
 
 	tmp.data = &next;
 	ret = proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
 	if (!ret && write)
-		WRITE_ONCE(ns->idr.idr_next, next + 1);
+		WRITE_ONCE(droid_lkm_pidns_idr(ns)->idr_next, next + 1);
 
 	return ret;
 }

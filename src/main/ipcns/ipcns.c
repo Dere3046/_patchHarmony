@@ -171,7 +171,7 @@ out_kernel_ns:
 	droid_lkm_ns_set_ops(&ns->ns, &droid_lkm_ipcns_ops, CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(ns), 1);
 	/* same ownership rule as the fake pid namespace, see droid_lkm_pidns_create */
-	ns->user_ns = current_cred()->user_ns;
+	ns->user_ns = droid_lkm_task_cred(current)->user_ns;
 	droid_lkm_get_user_ns(ns->user_ns);
 	ns->ucounts = NULL;
 
@@ -359,9 +359,9 @@ struct ipc_namespace *droid_lkm_ipcns_task_ns(struct task_struct *task)
 	struct nsproxy *nsproxy;
 
 	task_lock(task);
-	nsproxy = task->nsproxy;
+	nsproxy = droid_lkm_task_nsproxy(task);
 	if (nsproxy)
-		ns = nsproxy->ipc_ns;
+		ns = droid_lkm_nsproxy_ipc_ns(nsproxy);
 	task_unlock(task);
 
 	if (!ns)
@@ -386,13 +386,14 @@ static int droid_lkm_ipcns_install(struct nsset *nsset, struct ns_common *new)
 	struct nsproxy *nsproxy = nsset->nsproxy;
 	struct ipc_namespace *ns = to_ipc_ns(new);
 
-	droid_lkm_dbg("setns(ipc): %s[%d] -> ns=%p\n", current->comm, current->pid, ns);
+	droid_lkm_dbg("setns(ipc): %s[%d] -> ns=%p\n",
+	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), ns);
 
 	if (!ns_capable(ns->user_ns, CAP_SYS_ADMIN) ||
 	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
-	nsproxy->ipc_ns = ns;
+	droid_lkm_nsproxy_set_ipc_ns(nsproxy, ns);
 	return 0;
 }
 
@@ -530,7 +531,7 @@ int droid_lkm_ipcns_init(void)
 	 * ipcns_operations
 	 */
 	if (droid_lkm_caps.ipc_ns.owner == DROID_LKM_KERNEL &&
-	    droid_lkm_init_nsproxy->ipc_ns) {
+	    droid_lkm_nsproxy_ipc_ns(droid_lkm_init_nsproxy)) {
 	/*
 	 * the kernel's own init ipc namespace is the one every task already
 	 * points at, so serve it rather than install a substitute. only the sysv
@@ -539,7 +540,7 @@ int droid_lkm_ipcns_init(void)
 	 * the kernel's, which keeps its free_ipc_ns() and mq_open() consistent.
 	 */
 	droid_lkm_ipcns_kernel_owned = true;
-	droid_lkm_ipcns_orig = droid_lkm_init_nsproxy->ipc_ns;
+	droid_lkm_ipcns_orig = droid_lkm_nsproxy_ipc_ns(droid_lkm_init_nsproxy);
 	droid_lkm_ipcns_host = droid_lkm_ipcns_orig;
 	/*
 	 * only the half the kernel did not build, and only when the module is the
@@ -592,13 +593,18 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 	unsigned long flags;
 	int leaked = 0;
 
+	if (!droid_lkm_layout_trusted())
+		return;
+
 	droid_lkm_ipc_proc_exit();
 
 	droid_lkm_ipc_sysctls_exit();
 
 	if (droid_lkm_caps.ipc_ns.owner == DROID_LKM_KERNEL && droid_lkm_init_nsproxy &&
-	    droid_lkm_ipcns_is_ours(droid_lkm_init_nsproxy->ipc_ns))
-		droid_lkm_init_nsproxy->ipc_ns = droid_lkm_ipcns_orig;
+	    droid_lkm_ipcns_is_ours(
+		    droid_lkm_nsproxy_ipc_ns(droid_lkm_init_nsproxy)))
+		droid_lkm_nsproxy_set_ipc_ns(droid_lkm_init_nsproxy,
+					     droid_lkm_ipcns_orig);
 	droid_lkm_reset_task_ns_refs();
 
 	rcu_barrier();

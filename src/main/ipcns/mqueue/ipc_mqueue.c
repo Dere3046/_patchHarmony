@@ -993,7 +993,7 @@ static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umo
 		droid_lkm_dbg("mq open: prepare %s ro=%d -> %d\n",
 			      name->name, ro, error);
 	if (!error) {
-		struct file *file = dentry_open(&path, oflag, current_cred());
+		struct file *file = dentry_open(&path, oflag, droid_lkm_task_cred(current));
 		if (!IS_ERR(file))
 			fd_install(fd, file);
 		else

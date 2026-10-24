@@ -30,7 +30,8 @@
  */
 static struct user_namespace *droid_lkm_pidns_ns_owner(struct ns_common *ns)
 {
-	return container_of(ns, struct pid_namespace, ns)->user_ns;
+	return droid_lkm_pidns_user_ns((struct pid_namespace *)(
+		(char *)ns - droid_lkm_layout_off(DROID_LKM_F_PID_NS_NS)));
 }
 
 static struct user_namespace *droid_lkm_ipcns_ns_owner(struct ns_common *ns)
@@ -134,7 +135,7 @@ static struct ns_common *droid_lkm_host_pid_get(struct task_struct *task)
 
 	if (!droid_lkm_host_pid_ns_object)
 		return NULL;
-	return &droid_lkm_host_pid_ns_object->ns;
+	return droid_lkm_pidns_ns(droid_lkm_host_pid_ns_object);
 }
 
 static void droid_lkm_host_ns_put(struct ns_common *ns)
@@ -155,10 +156,11 @@ static int droid_lkm_host_pid_install(struct nsset *nsset, struct ns_common *ns)
 	 * child of it, so a task that sits in a fake level L namespace must not
 	 * be able to setns back onto the level 0 host entry
 	 */
-	if (active->level > 0 || active != &init_pid_ns)
+	if (droid_lkm_pidns_level(active) > 0 || active != &init_pid_ns)
 		return -EINVAL;
 
-	nsset->nsproxy->pid_ns_for_children = &init_pid_ns;
+	droid_lkm_nsproxy_set_pid_ns_for_children(nsset->nsproxy,
+						  &init_pid_ns);
 	return 0;
 }
 
@@ -208,7 +210,7 @@ int droid_lkm_ns_ops_host_init(void)
 {
 	struct pid_namespace *ns;
 
-	ns = kzalloc(sizeof(*ns), GFP_KERNEL);
+	ns = kzalloc(droid_lkm_pidns_size(), GFP_KERNEL);
 	if (!ns)
 		return -ENOMEM;
 
@@ -224,15 +226,17 @@ int droid_lkm_ns_ops_host_init(void)
 		return -ENOMEM;
 	}
 
-	ns->user_ns = droid_lkm_ks.init_user_ns;
-	droid_lkm_ns_stash_clear(&ns->ns);
-	ns->ns.inum = PROC_PID_INIT_INO;
+	droid_lkm_pidns_set_user_ns(ns, droid_lkm_ks.init_user_ns);
+	droid_lkm_ns_stash_clear(droid_lkm_pidns_ns(ns));
+	droid_lkm_pidns_ns(ns)->inum = PROC_PID_INIT_INO;
 	refcount_set(droid_lkm_pidns_refcount(ns), DROID_LKM_NS_LEAK_REFCOUNT);
 
-	droid_lkm_ns_set_ops(&ns->ns, droid_lkm_host_pid_ops_built, CLONE_NEWPID);
+	droid_lkm_ns_set_ops(droid_lkm_pidns_ns(ns),
+			     droid_lkm_host_pid_ops_built, CLONE_NEWPID);
 	droid_lkm_host_pid_ns_object = ns;
 
-	droid_lkm_info("host pid ns placeholder ready (inum=%u)\n", ns->ns.inum);
+	droid_lkm_info("host pid ns placeholder ready (inum=%u)\n",
+		       droid_lkm_pidns_ns(ns)->inum);
 	return 0;
 }
 

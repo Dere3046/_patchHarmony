@@ -12,6 +12,9 @@ SRCDIR=$(cd "$(dirname "$0")/.." && pwd)
 
 docker run --rm \
 	-e KDIR=/opt/ddk/kdir/${TARGET} \
+	-e DROID_LKM_LAYOUT_FALLBACK \
+	-e DROID_LKM_LAYOUT_FORCE_BUILD \
+	-e DROID_LKM_LAYOUT_TEST_BUILD_SHIFT \
 	-v "$SRCDIR":/src \
 	-w /src \
 	"$IMAGE" \

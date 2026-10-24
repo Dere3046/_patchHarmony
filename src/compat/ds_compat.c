@@ -127,6 +127,8 @@ const char *ds_compat_state_name(u8 state)
 		return "unverified";
 	case DS_COMPAT_ANCHORED:
 		return "anchored";
+	case DS_COMPAT_VERIFIED:
+		return "verified";
 	case DS_COMPAT_BUILD:
 		return "build";
 	default:
@@ -152,7 +154,7 @@ static void ds_compat_layout_unverified(struct ds_compat_layout *l)
 bool ds_compat_layout_init(struct ds_compat_layout *l)
 {
 	struct ti_resolver res = { .name_to_addr = ds_compat_sym };
-	unsigned int ok = 0, differs = 0, missing = 0;
+	unsigned int ok = 0, missing = 0;
 	unsigned int i;
 
 	if (!l || !l->fields || !l->types)
@@ -185,12 +187,6 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 		}
 
 		f->live = bit_off / 8;
-		/* build is zero for a field the module has no build reference for */
-		if (f->build && f->live != f->build) {
-			f->state = DS_COMPAT_DIFFERS;
-			differs++;
-			continue;
-		}
 		f->state = DS_COMPAT_OK;
 		ok++;
 	}
@@ -211,17 +207,11 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 			missing++;
 			continue;
 		}
-		/* build is zero when the module only needs the running size */
-		if (t->build && t->live != t->build) {
-			t->state = DS_COMPAT_DIFFERS;
-			differs++;
-			continue;
-		}
 		t->state = DS_COMPAT_OK;
 	}
 
-	ds_compat_info("layout: BTF %u/%u fields as built, %u differ, %u not in BTF\n",
-		       ok, l->nfields, differs, missing);
+	ds_compat_info("layout: BTF %u/%u fields live, %u not in BTF\n",
+		       ok, l->nfields, missing);
 
 	for (i = 0; i < l->nfields; i++) {
 		struct ds_compat_field *f = &l->fields[i];
@@ -231,7 +221,56 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 				       f->type, f->member, f->live, f->build);
 	}
 
-	return !differs && !missing;
+	return !missing;
+}
+
+void ds_compat_layout_fallback(struct ds_compat_layout *l)
+{
+	unsigned int i;
+
+	if (!l)
+		return;
+
+	for (i = 0; i < l->nfields; i++) {
+		struct ds_compat_field *f = &l->fields[i];
+
+		if (f->state == DS_COMPAT_OK || f->state == DS_COMPAT_VERIFIED ||
+		    f->state == DS_COMPAT_ANCHORED || f->state == DS_COMPAT_BUILD)
+			continue;
+		f->live = f->build;
+		f->state = DS_COMPAT_BUILD;
+		ds_compat_warn("layout fallback: %s.%s uses build %u\n",
+			       f->type, f->member, f->build);
+	}
+	for (i = 0; i < l->ntypes; i++) {
+		struct ds_compat_type *t = &l->types[i];
+
+		if (t->state == DS_COMPAT_OK || t->state == DS_COMPAT_VERIFIED ||
+		    t->state == DS_COMPAT_ANCHORED || t->state == DS_COMPAT_BUILD)
+			continue;
+		t->live = t->build;
+		t->state = DS_COMPAT_BUILD;
+		ds_compat_warn("layout fallback: sizeof(%s) uses build %u\n",
+			       t->name, t->build);
+	}
+}
+
+void ds_compat_layout_force_build(struct ds_compat_layout *l)
+{
+	unsigned int i;
+
+	if (!l)
+		return;
+
+	for (i = 0; i < l->nfields; i++) {
+		l->fields[i].live = l->fields[i].build;
+		l->fields[i].state = DS_COMPAT_BUILD;
+	}
+	for (i = 0; i < l->ntypes; i++) {
+		l->types[i].live = l->types[i].build;
+		l->types[i].state = DS_COMPAT_BUILD;
+	}
+	ds_compat_warn("layout: forced to the build offsets for every field\n");
 }
 
 void ds_compat_layout_report(struct ds_compat_layout *l)
@@ -244,7 +283,8 @@ void ds_compat_layout_report(struct ds_compat_layout *l)
 	for (i = 0; i < l->nfields; i++) {
 		if (l->fields[i].state == DS_COMPAT_OK)
 			btf++;
-		else if (l->fields[i].state == DS_COMPAT_ANCHORED)
+		else if (l->fields[i].state == DS_COMPAT_ANCHORED ||
+			 l->fields[i].state == DS_COMPAT_VERIFIED)
 			anchor++;
 		else if (l->fields[i].state == DS_COMPAT_BUILD)
 			build++;

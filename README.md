@@ -10,6 +10,7 @@ compatibility.
 
 | Kernel Version | Android Version | Target |
 | :--- | :--- | :--- |
+| **5.10** | Android 12 | `android12-5.10` |
 | **5.10** | Android 13 | `android13-5.10` |
 | **5.15** | Android 13 | `android13-5.15` |
 | **5.15** | Android 14 | `android14-5.15` |

@@ -36,6 +36,7 @@ static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 	DROID_LKM_FIELD(DROID_LKM_F_PID_NS_UCOUNTS, pid_namespace, ucounts)
 	DROID_LKM_FIELD(DROID_LKM_F_PID_NS_PID_ALLOCATED, pid_namespace, pid_allocated)
 	DROID_LKM_FIELD(DROID_LKM_F_PID_NS_NS, pid_namespace, ns)
+	DROID_LKM_FIELD(DROID_LKM_F_PID_NS_REBOOT, pid_namespace, reboot)
 	DROID_LKM_FIELD(DROID_LKM_F_NSPROXY_IPC_NS, nsproxy, ipc_ns)
 	DROID_LKM_FIELD(DROID_LKM_F_NSPROXY_PID_NS_FOR_CHILDREN, nsproxy, pid_ns_for_children)
 	DROID_LKM_FIELD(DROID_LKM_F_NSPROXY_UTS_NS, nsproxy, uts_ns)
@@ -54,6 +55,7 @@ static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 	DROID_LKM_FIELD(DROID_LKM_F_TASK_SIGNAL, task_struct, signal)
 	DROID_LKM_FIELD(DROID_LKM_F_TASK_SIGHAND, task_struct, sighand)
 	DROID_LKM_FIELD(DROID_LKM_F_TASK_MM, task_struct, mm)
+	DROID_LKM_FIELD(DROID_LKM_F_TASK_FS, task_struct, fs)
 	DROID_LKM_FIELD(DROID_LKM_F_TASK_FLAGS, task_struct, flags)
 	DROID_LKM_FIELD(DROID_LKM_F_TASK_SE, task_struct, se)
 	DROID_LKM_FIELD(DROID_LKM_F_SEQ_FILE_BUF, seq_file, buf)
@@ -88,6 +90,7 @@ static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 
 static struct ds_compat_type droid_lkm_types[DROID_LKM_TYPE_COUNT] = {
 	DROID_LKM_TYPE(DROID_LKM_T_UPID, upid)
+	DROID_LKM_TYPE(DROID_LKM_T_PID_NAMESPACE, pid_namespace)
 };
 
 static struct ds_compat_layout droid_lkm_layout = {
@@ -102,7 +105,14 @@ static bool droid_lkm_layout_trusted_flag;
 
 static bool droid_lkm_layout_verified(u8 state)
 {
-	return state == DS_COMPAT_OK || state == DS_COMPAT_ANCHORED;
+	if (state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
+	    state == DS_COMPAT_ANCHORED)
+		return true;
+#if defined(DROID_LKM_LAYOUT_FALLBACK) || defined(DROID_LKM_LAYOUT_FORCE_BUILD)
+	return state == DS_COMPAT_BUILD;
+#else
+	return false;
+#endif
 }
 
 static bool droid_lkm_layout_field_verified(const char *type, const char *member)
@@ -144,6 +154,7 @@ static bool droid_lkm_layout_required_ok(void)
 		{ "task_struct", "thread_pid" },
 		{ "task_struct", "tasks" },
 		{ "task_struct", "mm" },
+		{ "task_struct", "fs" },
 		{ "task_struct", "signal" },
 		{ "task_struct", "sighand" },
 		{ "task_struct", "flags" },
@@ -156,10 +167,16 @@ static bool droid_lkm_layout_required_ok(void)
 		{ "pid", "numbers" },
 		{ "upid", "nr" },
 		{ "upid", "ns" },
+		{ "pid_namespace", "idr" },
 		{ "pid_namespace", "level" },
+		{ "pid_namespace", "parent" },
+		{ "pid_namespace", "pid_cachep" },
+		{ "pid_namespace", "pid_allocated" },
 		{ "pid_namespace", "ns" },
 		{ "pid_namespace", "user_ns" },
+		{ "pid_namespace", "ucounts" },
 		{ "pid_namespace", "child_reaper" },
+		{ "pid_namespace", "reboot" },
 	};
 	unsigned int i;
 
@@ -170,8 +187,9 @@ static bool droid_lkm_layout_required_ok(void)
 			return false;
 		}
 	}
-	if (!droid_lkm_layout_type_verified(DROID_LKM_T_UPID)) {
-		pr_info("[droid_lkm] layout: required sizeof(upid) is not verified\n");
+	if (!droid_lkm_layout_type_verified(DROID_LKM_T_UPID) ||
+	    !droid_lkm_layout_type_verified(DROID_LKM_T_PID_NAMESPACE)) {
+		pr_info("[droid_lkm] layout: required type size is not verified\n");
 		return false;
 	}
 	return true;
@@ -180,7 +198,29 @@ static bool droid_lkm_layout_required_ok(void)
 void droid_lkm_layout_init(void)
 {
 	droid_lkm_layout_trusted_flag = false;
+#ifdef DROID_LKM_LAYOUT_TEST_BUILD_SHIFT
+	{
+		unsigned int i;
+
+		for (i = 0; i < droid_lkm_layout.nfields; i++) {
+			struct ds_compat_field *f = &droid_lkm_layout.fields[i];
+
+			if (!strcmp(f->type, "ipc_namespace") ||
+			    !strcmp(f->type, "seq_file"))
+				continue;
+			f->build += DROID_LKM_LAYOUT_TEST_BUILD_SHIFT;
+		}
+		for (i = 0; i < droid_lkm_layout.ntypes; i++)
+			droid_lkm_layout.types[i].build +=
+				DROID_LKM_LAYOUT_TEST_BUILD_SHIFT;
+	}
+#endif
 	ds_compat_layout_init(&droid_lkm_layout);
+#ifdef DROID_LKM_LAYOUT_FORCE_BUILD
+	ds_compat_layout_force_build(&droid_lkm_layout);
+#elif defined(DROID_LKM_LAYOUT_FALLBACK)
+	ds_compat_layout_fallback(&droid_lkm_layout);
+#endif
 	droid_lkm_layout_trusted_flag = droid_lkm_layout_required_ok();
 	if (!droid_lkm_layout_trusted_flag)
 		pr_warn("[droid_lkm] layout: kernel owned fields are not verified, namespace features stay off\n");
@@ -221,8 +261,8 @@ u32 droid_lkm_layout_off(enum droid_lkm_field_id id)
 
 static bool droid_lkm_layout_state_ok(u8 state)
 {
-	return state == DS_COMPAT_OK || state == DS_COMPAT_ANCHORED ||
-	       state == DS_COMPAT_BUILD;
+	return state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
+	       state == DS_COMPAT_ANCHORED || state == DS_COMPAT_BUILD;
 }
 
 bool droid_lkm_layout_ok(enum droid_lkm_field_id id)
@@ -251,6 +291,17 @@ bool droid_lkm_layout_type_ok(enum droid_lkm_type_id id)
 	if (id >= DROID_LKM_TYPE_COUNT)
 		return false;
 	return droid_lkm_layout_state_ok(droid_lkm_types[id].state);
+}
+
+u32 droid_lkm_pidns_size(void)
+{
+	u32 live = 0;
+
+	if (droid_lkm_layout_type_ok(DROID_LKM_T_PID_NAMESPACE))
+		live = droid_lkm_layout_type_size(DROID_LKM_T_PID_NAMESPACE);
+	if (live < sizeof(struct pid_namespace))
+		live = sizeof(struct pid_namespace);
+	return live;
 }
 
 void droid_lkm_layout_report(void)

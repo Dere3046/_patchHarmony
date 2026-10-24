@@ -49,8 +49,8 @@ static int (*droid_lkm_status_orig)(struct seq_file *m, struct pid_namespace *ns
 static bool droid_lkm_status_can_insert;
 static bool droid_lkm_status_seq_bad;
 static u32 droid_lkm_sf_buf, droid_lkm_sf_count, droid_lkm_sf_size;
-static u32 droid_lkm_pid_level, droid_lkm_pid_numbers;
-static u32 droid_lkm_upid_ns, droid_lkm_upid_stride;
+static u32 droid_lkm_pid_level_off, droid_lkm_pid_numbers_off;
+static u32 droid_lkm_upid_ns_off, droid_lkm_upid_stride;
 
 static __nocfi noinline void droid_lkm_put_str(struct seq_file *m, const char *s)
 {
@@ -62,15 +62,15 @@ static __nocfi noinline void droid_lkm_put_str(struct seq_file *m, const char *s
 
 static struct pid_namespace *droid_lkm_ns_at(struct pid *pid, int level)
 {
-	char *base = (char *)pid + droid_lkm_pid_numbers;
+	char *base = (char *)pid + droid_lkm_pid_numbers_off;
 
 	return *(struct pid_namespace **)(base + level * droid_lkm_upid_stride +
-					  droid_lkm_upid_ns);
+					  droid_lkm_upid_ns_off);
 }
 
 static int droid_lkm_pid_level_of(struct pid *pid)
 {
-	return *(int *)((char *)pid + droid_lkm_pid_level);
+	return *(int *)((char *)pid + droid_lkm_pid_level_off);
 }
 
 static int droid_lkm_ns_level_of(struct pid_namespace *ns)
@@ -264,9 +264,9 @@ int droid_lkm_status_init(void)
 		return -ENODATA;
 	}
 
-	droid_lkm_pid_level = droid_lkm_layout_off(DROID_LKM_F_PID_LEVEL);
-	droid_lkm_pid_numbers = droid_lkm_layout_off(DROID_LKM_F_PID_NUMBERS);
-	droid_lkm_upid_ns = droid_lkm_layout_off(DROID_LKM_F_UPID_NS);
+	droid_lkm_pid_level_off = droid_lkm_layout_off(DROID_LKM_F_PID_LEVEL);
+	droid_lkm_pid_numbers_off = droid_lkm_layout_off(DROID_LKM_F_PID_NUMBERS);
+	droid_lkm_upid_ns_off = droid_lkm_layout_off(DROID_LKM_F_UPID_NS);
 	droid_lkm_upid_stride = droid_lkm_layout_type_size(DROID_LKM_T_UPID);
 
 	if (droid_lkm_layout_ok(DROID_LKM_F_SEQ_FILE_BUF) &&

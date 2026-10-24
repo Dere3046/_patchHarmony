@@ -164,6 +164,16 @@ ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 ccflags-y += -Wno-missing-prototypes
 
 # KernCall: enable sys_call_table slot patching
+# off by default. enable with make DROID_LKM_LAYOUT_FALLBACK=1
+ifeq ($(DROID_LKM_LAYOUT_FALLBACK),1)
+ccflags-y += -DDROID_LKM_LAYOUT_FALLBACK
+endif
+ifeq ($(DROID_LKM_LAYOUT_FORCE_BUILD),1)
+ccflags-y += -DDROID_LKM_LAYOUT_FORCE_BUILD
+endif
+ifneq ($(DROID_LKM_LAYOUT_TEST_BUILD_SHIFT),)
+ccflags-y += -DDROID_LKM_LAYOUT_TEST_BUILD_SHIFT=$(DROID_LKM_LAYOUT_TEST_BUILD_SHIFT)
+endif
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
 
 all:

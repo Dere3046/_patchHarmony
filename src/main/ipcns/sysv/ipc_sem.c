@@ -71,6 +71,7 @@
  */
 
 #include <linux/compat.h>
+#include "ds.h"
 #include "ds_ipc_compat.h"
 #include "ds_ipcns.h"
 #include <linux/slab.h>
@@ -1076,7 +1077,7 @@ static int check_qop(struct sem_array *sma, int semnum, struct sem_queue *q,
 	 */
 	pr_info_once("semctl(GETNCNT/GETZCNT) is since 3.16 Single Unix Specification compliant.\n"
 			"The task %s (%d) triggered the difference, watch for misbehavior.\n",
-			current->comm, task_pid_nr(current));
+			droid_lkm_task_comm(current), droid_lkm_task_pid(current));
 
 	if (sop->sem_num != semnum)
 		return 0;

@@ -188,9 +188,9 @@ static __nocfi noinline struct dentry *droid_lkm_ns_lookup(struct inode *dir, st
 	if (!task)
 		return ERR_PTR(-ENOENT);
 
-	droid_lkm_dbg("proc ns lookup: %s[%d] name=%.*s kind=%d\n", task->comm,
-	       task_pid_nr(task), (int)dentry->d_name.len, dentry->d_name.name,
-	       (int)kind);
+	droid_lkm_dbg("proc ns lookup: %s[%d] name=%.*s kind=%d\n",
+	       droid_lkm_task_comm(task), droid_lkm_task_pid(task),
+	       (int)dentry->d_name.len, dentry->d_name.name, (int)kind);
 
 	if (kind == DROID_LKM_NS_IPC) {
 		res = droid_lkm_ns_instantiate(dentry, task,
