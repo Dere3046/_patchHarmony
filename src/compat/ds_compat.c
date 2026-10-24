@@ -112,7 +112,43 @@ int ds_compat_write(void *dst, unsigned long val)
 	return hk_write_run(dst, &val, sizeof(val), &w);
 }
 
+const char *ds_compat_state_name(u8 state)
+{
+	switch (state) {
+	case DS_COMPAT_OK:
+		return "ok";
+	case DS_COMPAT_NO_TYPE:
+		return "no-type";
+	case DS_COMPAT_NO_MEMBER:
+		return "no-member";
+	case DS_COMPAT_DIFFERS:
+		return "differs";
+	case DS_COMPAT_UNVERIFIED:
+		return "unverified";
+	case DS_COMPAT_ANCHORED:
+		return "anchored";
+	case DS_COMPAT_BUILD:
+		return "build";
+	default:
+		return "?";
+	}
+}
+
 /* the layout engine reads BTF through the type info reader */
+static void ds_compat_layout_unverified(struct ds_compat_layout *l)
+{
+	unsigned int i;
+
+	for (i = 0; i < l->nfields; i++) {
+		l->fields[i].live = 0;
+		l->fields[i].state = DS_COMPAT_UNVERIFIED;
+	}
+	for (i = 0; i < l->ntypes; i++) {
+		l->types[i].live = 0;
+		l->types[i].state = DS_COMPAT_UNVERIFIED;
+	}
+}
+
 bool ds_compat_layout_init(struct ds_compat_layout *l)
 {
 	struct ti_resolver res = { .name_to_addr = ds_compat_sym };
@@ -122,16 +158,14 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 	if (!l || !l->fields || !l->types)
 		return false;
 
+	ds_compat_layout_unverified(l);
+
 	if (ti_init(&res)) {
-		ds_compat_warn("layout: type info refused to start, every offset stays compile time\n");
+		ds_compat_warn("layout: type info refused to start, every offset is refused\n");
 		return false;
 	}
-	if (!ti_btf_available()) {
-		// BTF only
-		// anchor.o is not linked on purpose
-		ds_compat_warn("layout: the running kernel has no BTF, offsets stay compile time and features that need one must be refused by hand\n");
-		return false;
-	}
+	if (!ti_btf_available())
+		return ds_compat_layout_anchor(l);
 
 	for (i = 0; i < l->nfields; i++) {
 		struct ds_compat_field *f = &l->fields[i];
@@ -202,14 +236,18 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 
 void ds_compat_layout_report(struct ds_compat_layout *l)
 {
-	unsigned int ok = 0, i;
+	unsigned int btf = 0, anchor = 0, build = 0, i;
 
 	if (!l)
 		return;
 
 	for (i = 0; i < l->nfields; i++) {
 		if (l->fields[i].state == DS_COMPAT_OK)
-			ok++;
+			btf++;
+		else if (l->fields[i].state == DS_COMPAT_ANCHORED)
+			anchor++;
+		else if (l->fields[i].state == DS_COMPAT_BUILD)
+			build++;
 	}
 
 	for (i = 0; i < l->ntypes; i++) {
@@ -219,5 +257,22 @@ void ds_compat_layout_report(struct ds_compat_layout *l)
 				       l->types[i].build);
 	}
 
-	ds_compat_info("layout: %u/%u offsets from BTF\n", ok, l->nfields);
+	ds_compat_info("layout: %u/%u offsets verified (%u btf, %u anchor, %u build)\n",
+		       btf + anchor + build, l->nfields, btf, anchor, build);
+
+	for (i = 0; i < l->nfields; i++) {
+		const struct ds_compat_field *f = &l->fields[i];
+
+		ds_compat_info("layout: %s.%s %s live=%u build=%u\n",
+			       f->type, f->member,
+			       ds_compat_state_name(f->state),
+			       f->live, f->build);
+	}
+	for (i = 0; i < l->ntypes; i++) {
+		const struct ds_compat_type *t = &l->types[i];
+
+		ds_compat_info("layout: sizeof(%s) %s live=%u build=%u\n",
+			       t->name, ds_compat_state_name(t->state),
+			       t->live, t->build);
+	}
 }

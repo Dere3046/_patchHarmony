@@ -47,6 +47,7 @@ static int (*droid_lkm_status_orig)(struct seq_file *m, struct pid_namespace *ns
 
 // insert stays off until init finds the seq_file offsets
 static bool droid_lkm_status_can_insert;
+static bool droid_lkm_status_seq_bad;
 static u32 droid_lkm_sf_buf, droid_lkm_sf_count, droid_lkm_sf_size;
 static u32 droid_lkm_pid_level, droid_lkm_pid_numbers;
 static u32 droid_lkm_upid_ns, droid_lkm_upid_stride;
@@ -129,7 +130,7 @@ static __nocfi noinline void droid_lkm_ns_lines(struct seq_file *m,
 					     task, type, droid_lkm_ns_at(pid, g)));
 }
 
-static void droid_lkm_status_append_block(struct seq_file *m,
+static __nocfi noinline void droid_lkm_status_append_block(struct seq_file *m,
 					  struct task_struct *task,
 					  struct pid_namespace *ns,
 					  struct pid *pid)
@@ -181,6 +182,20 @@ static bool droid_lkm_status_insert(struct seq_file *m, struct task_struct *task
 	buf = *(char **)((char *)m + droid_lkm_sf_buf);
 	count = *(unsigned long *)((char *)m + droid_lkm_sf_count);
 	size = *(unsigned long *)((char *)m + droid_lkm_sf_size);
+
+	/*
+	 * the build offsets are the only source for the seq_file prefix, so the
+	 * pointers get one sanity pass before the buffer is moved
+	 */
+	if (!buf || count > size || size < PAGE_SIZE || size > (1U << 20)) {
+		if (!droid_lkm_status_seq_bad) {
+			droid_lkm_status_seq_bad = true;
+			droid_lkm_status_can_insert = false;
+			droid_lkm_warn("NSpid emulation: seq_file layout refused (buf=%p count=%lu size=%lu), appending from now on\n",
+				       buf, count, size);
+		}
+		return false;
+	}
 
 	if (!droid_lkm_status_at(buf, count, &at) || count + len > size)
 		return false;
@@ -245,7 +260,7 @@ int droid_lkm_status_init(void)
 	    !droid_lkm_layout_ok(DROID_LKM_F_UPID_NS) ||
 	    !droid_lkm_layout_ok(DROID_LKM_F_PID_NS_LEVEL) ||
 	    !droid_lkm_layout_type_ok(DROID_LKM_T_UPID)) {
-		droid_lkm_warn("NSpid emulation skipped, BTF does not describe struct pid\n");
+		droid_lkm_warn("NSpid emulation skipped, struct pid layout refused\n");
 		return -ENODATA;
 	}
 

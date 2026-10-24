@@ -733,6 +733,9 @@ __nocfi noinline void droid_lkm_pidns_exit(void)
 	int i, leaked = 0;
 	bool caches_clean = true;
 
+	if (!droid_lkm_pidns_cachep)
+		return;
+
 	unregister_kprobe(&droid_lkm_kp_do_exit);
 
 	droid_lkm_pidns_retire_reapers();

@@ -36,20 +36,7 @@
 #define DROID_LKM_MQ_IDMAP_ARG
 #endif
 
-static inline void droid_lkm_mq_inode_init_ts(struct inode *inode)
-{
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
-	/*
-	 * 6.18 marks simple_inode_init_ts protected and declares it inline, so it
-	 * is called through the resolved pointer: a kernel that refuses it leaves
-	 * the timestamps as the allocator left them
-	 */
-	if (droid_lkm_ks.simple_inode_init_ts)
-		droid_lkm_ks.simple_inode_init_ts(inode);
-#else
-	inode->i_mtime = inode->i_ctime = inode->i_atime = current_time(inode);
-#endif
-}
+void droid_lkm_mq_inode_init_ts(struct inode *inode);
 
 static inline void droid_lkm_mq_inode_touch(struct inode *inode)
 {
@@ -128,33 +115,52 @@ extern typeof(&netlink_detachskb) droid_lkm_p_netlink_detachskb;
 extern typeof(&schedule_hrtimeout_range_clock) droid_lkm_p_schedule_hrtimeout_range_clock;
 #ifdef CONFIG_COMPAT
 extern typeof(&get_compat_sigevent) droid_lkm_p_get_compat_sigevent;
-#define get_compat_sigevent(e, u) droid_lkm_p_get_compat_sigevent((e), (u))
+#define get_compat_sigevent(e, u) droid_lkm_mq_get_compat_sigevent((e), (u))
 #endif
 
+/* 6.18 replaced getname(name) with getname_uflags(name, 0) */
+struct filename *droid_lkm_getname(const char __user *name);
 /*
- * 6.18 replaced getname(name) with getname_uflags(name, 0): both answer the
- * same filename, so the newer name is asked when the old one is gone
+ * every runtime resolved pointer is called from an out of line wrapper. old
+ * CFI cannot see through an inlined helper, and the annotation only covers the
+ * function body it is placed on
  */
-static inline struct filename *droid_lkm_getname(const char __user *name)
-{
-	if (droid_lkm_p_getname)
-		return droid_lkm_p_getname(name);
-	if (droid_lkm_p_getname_uflags)
-		return droid_lkm_p_getname_uflags(name, 0);
-	return ERR_PTR(-ENOSYS);
-}
-#define putname(n)			droid_lkm_p_putname(n)
-#define get_next_ino()			droid_lkm_p_get_next_ino()
-#define vfs_mkobj(d, m, f, a)		droid_lkm_p_vfs_mkobj((d), (m), (f), (a))
-#define fs_context_for_mount(t, f)	droid_lkm_p_fs_context_for_mount((t), (f))
-#define get_tree_keyed(c, f, k)		droid_lkm_p_get_tree_keyed((c), (f), (k))
+void droid_lkm_mq_putname(struct filename *name);
+unsigned int droid_lkm_mq_get_next_ino(void);
+int droid_lkm_mq_vfs_mkobj(struct dentry *dentry, umode_t mode,
+			   int (*f)(struct dentry *, umode_t, void *), void *data);
+struct fs_context *droid_lkm_mq_fs_context_for_mount(
+				struct file_system_type *type, unsigned int sb_flags);
+int droid_lkm_mq_get_tree_keyed(struct fs_context *fc,
+				int (*fill_super)(struct super_block *sb,
+						  struct fs_context *fc),
+				void *key);
+struct sock *droid_lkm_mq_netlink_getsockbyfilp(struct file *filp);
+struct sock *droid_lkm_mq_netlink_getsockbyfd(int fd);
+int droid_lkm_mq_netlink_attachskb(struct sock *sk, struct sk_buff *skb,
+				   long *timeo, struct sock *ssk);
+int droid_lkm_mq_netlink_sendskb(struct sock *sk, struct sk_buff *skb);
+void droid_lkm_mq_netlink_detachskb(struct sock *sk, struct sk_buff *skb);
+int droid_lkm_mq_schedule_hrtimeout_range_clock(ktime_t *expires, u64 delta,
+						const enum hrtimer_mode mode,
+						clockid_t clock_id);
+#ifdef CONFIG_COMPAT
+int droid_lkm_mq_get_compat_sigevent(struct sigevent *event,
+				     const struct compat_sigevent __user *u);
+#endif
+
+#define putname(n)			droid_lkm_mq_putname(n)
+#define get_next_ino()			droid_lkm_mq_get_next_ino()
+#define vfs_mkobj(d, m, f, a)		droid_lkm_mq_vfs_mkobj((d), (m), (f), (a))
+#define fs_context_for_mount(t, f)	droid_lkm_mq_fs_context_for_mount((t), (f))
+#define get_tree_keyed(c, f, k)		droid_lkm_mq_get_tree_keyed((c), (f), (k))
 #define put_ucounts(u)			droid_lkm_mq_ucounts_put(u)
-#define netlink_getsockbyfilp(f)	droid_lkm_p_netlink_getsockbyfilp(f)
-#define netlink_attachskb(s, b, t, ss)	droid_lkm_p_netlink_attachskb((s), (b), (t), (ss))
-#define netlink_sendskb(s, b)		droid_lkm_p_netlink_sendskb((s), (b))
-#define netlink_detachskb(s, b)		droid_lkm_p_netlink_detachskb((s), (b))
+#define netlink_getsockbyfilp(f)	droid_lkm_mq_netlink_getsockbyfilp(f)
+#define netlink_attachskb(s, b, t, ss)	droid_lkm_mq_netlink_attachskb((s), (b), (t), (ss))
+#define netlink_sendskb(s, b)		droid_lkm_mq_netlink_sendskb((s), (b))
+#define netlink_detachskb(s, b)		droid_lkm_mq_netlink_detachskb((s), (b))
 #define schedule_hrtimeout_range_clock(e, d, m, c) \
-					droid_lkm_p_schedule_hrtimeout_range_clock((e), (d), (m), (c))
+					droid_lkm_mq_schedule_hrtimeout_range_clock((e), (d), (m), (c))
 
 #define simple_statfs		droid_lkm_mq_simple_statfs
 #define simple_lookup		droid_lkm_mq_simple_lookup

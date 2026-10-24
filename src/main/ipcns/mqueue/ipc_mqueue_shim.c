@@ -293,7 +293,122 @@ MODULE_PARM_DESC(mqueue,
 		}                                                              \
 	} while (0)
 
-__nocfi noinline int droid_lkm_mqueue_shim_init(void)
+__nocfi noinline struct filename *droid_lkm_getname(const char __user *name)
+{
+	if (droid_lkm_p_getname)
+		return droid_lkm_p_getname(name);
+	if (droid_lkm_p_getname_uflags)
+		return droid_lkm_p_getname_uflags(name, 0);
+	return ERR_PTR(-ENOSYS);
+}
+
+__nocfi noinline void droid_lkm_mq_inode_init_ts(struct inode *inode)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+	if (droid_lkm_ks.simple_inode_init_ts)
+		droid_lkm_ks.simple_inode_init_ts(inode);
+#else
+	inode->i_mtime = inode->i_ctime = inode->i_atime = current_time(inode);
+#endif
+}
+
+__nocfi noinline void droid_lkm_mq_putname(struct filename *name)
+{
+	if (droid_lkm_p_putname)
+		droid_lkm_p_putname(name);
+}
+
+__nocfi noinline unsigned int droid_lkm_mq_get_next_ino(void)
+{
+	if (!droid_lkm_p_get_next_ino)
+		return 0;
+	return droid_lkm_p_get_next_ino();
+}
+
+__nocfi noinline int droid_lkm_mq_vfs_mkobj(struct dentry *dentry, umode_t mode,
+			     int (*f)(struct dentry *, umode_t, void *), void *data)
+{
+	if (!droid_lkm_p_vfs_mkobj)
+		return -ENOSYS;
+	return droid_lkm_p_vfs_mkobj(dentry, mode, f, data);
+}
+
+__nocfi noinline struct fs_context *droid_lkm_mq_fs_context_for_mount(
+				struct file_system_type *type, unsigned int sb_flags)
+{
+	if (!droid_lkm_p_fs_context_for_mount)
+		return ERR_PTR(-ENOSYS);
+	return droid_lkm_p_fs_context_for_mount(type, sb_flags);
+}
+
+__nocfi noinline int droid_lkm_mq_get_tree_keyed(struct fs_context *fc,
+				int (*fill_super)(struct super_block *sb,
+						  struct fs_context *fc),
+				void *key)
+{
+	if (!droid_lkm_p_get_tree_keyed)
+		return -ENOSYS;
+	return droid_lkm_p_get_tree_keyed(fc, fill_super, key);
+}
+
+__nocfi noinline struct sock *droid_lkm_mq_netlink_getsockbyfilp(struct file *filp)
+{
+	if (!droid_lkm_p_netlink_getsockbyfilp)
+		return ERR_PTR(-ENOSYS);
+	return droid_lkm_p_netlink_getsockbyfilp(filp);
+}
+
+__nocfi noinline struct sock *droid_lkm_mq_netlink_getsockbyfd(int fd)
+{
+	if (!droid_lkm_p_netlink_getsockbyfd)
+		return ERR_PTR(-ENOSYS);
+	return droid_lkm_p_netlink_getsockbyfd(fd);
+}
+
+__nocfi noinline int droid_lkm_mq_netlink_attachskb(struct sock *sk,
+				struct sk_buff *skb, long *timeo, struct sock *ssk)
+{
+	if (!droid_lkm_p_netlink_attachskb)
+		return -ENOSYS;
+	return droid_lkm_p_netlink_attachskb(sk, skb, timeo, ssk);
+}
+
+__nocfi noinline int droid_lkm_mq_netlink_sendskb(struct sock *sk,
+						  struct sk_buff *skb)
+{
+	if (!droid_lkm_p_netlink_sendskb)
+		return -ENOSYS;
+	return droid_lkm_p_netlink_sendskb(sk, skb);
+}
+
+__nocfi noinline void droid_lkm_mq_netlink_detachskb(struct sock *sk,
+						     struct sk_buff *skb)
+{
+	if (droid_lkm_p_netlink_detachskb)
+		droid_lkm_p_netlink_detachskb(sk, skb);
+}
+
+__nocfi noinline int droid_lkm_mq_schedule_hrtimeout_range_clock(ktime_t *expires,
+				u64 delta, const enum hrtimer_mode mode,
+				clockid_t clock_id)
+{
+	if (!droid_lkm_p_schedule_hrtimeout_range_clock)
+		return -ENOSYS;
+	return droid_lkm_p_schedule_hrtimeout_range_clock(expires, delta, mode,
+							  clock_id);
+}
+
+#ifdef CONFIG_COMPAT
+__nocfi noinline int droid_lkm_mq_get_compat_sigevent(struct sigevent *event,
+				const struct compat_sigevent __user *u)
+{
+	if (!droid_lkm_p_get_compat_sigevent)
+		return -ENOSYS;
+	return droid_lkm_p_get_compat_sigevent(event, u);
+}
+#endif
+
+int droid_lkm_mqueue_shim_init(void)
 {
 	int missing = 0;
 

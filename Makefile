@@ -18,14 +18,17 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
 #   oppo ddl history table
-# the module is built only for the targets it compiles on. the main module is
-# the one being ported, so probe the target kernel for a feature that only the
-# newer GKI branches carry instead of naming a version.
-DLKM_OPT := $(shell grep -q ' nop_mnt_idmap$$' $(KDIR)/System.map 2>/dev/null && echo m)
+# the vendor module supports 6.6 and 6.12 only; the main module is the one
+# being ported to the other branches
+VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
+	$(KDIR)/include/generated/utsrelease.h 2>/dev/null)
+DLKM_OPT := $(strip $(if $(filter 6.6 6.12,$(VENDOR_VER)),\
+	$(shell grep -q ' nop_mnt_idmap$$' $(KDIR)/System.map 2>/dev/null && echo m),))
 obj-$(DLKM_OPT) += droid_lkm_vendor.o
 DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 	src/compat/vendor/ddl_hit.o src/compat/vendor/vendor_syms.o \
-	src/compat/ds_compat.o src/hook/ds_hook.o
+	src/compat/ds_compat.o src/compat/ds_layout_anchor.o \
+	src/hook/ds_hook.o
 droid_lkm_vendor-y := $(DLC_VENDOR_OBJS) $(DEPS_OBJS_ALL)
 
 # droid_lkm_misc.o is not built yet, it is unfinished; re-enable it with the
@@ -114,6 +117,7 @@ MUNMAP_UNIT := $(shell if grep -qE ' [tT] do_vmi_munmap$$' $(KDIR)/System.map 2>
 
 droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \
 	src/hook/ds_hook.o src/compat/ds_compat.o \
+	src/compat/ds_layout_anchor.o \
 	$(MUNMAP_UNIT) \
 	src/main/core/ds_ksym.o \
 	src/main/core/ds_caps.o \

@@ -96,6 +96,7 @@ static struct hk_cfg droid_lkm_hk_cfg = {
 
 static int __init droid_lkm_init(void)
 {
+	bool trusted;
 	int ret;
 
 	ret = ds_compat_init("droid_lkm", "droid_lkm");
@@ -112,6 +113,7 @@ static int __init droid_lkm_init(void)
 		return ret;
 
 	droid_lkm_layout_init();
+	trusted = droid_lkm_layout_trusted();
 
 	ret = droid_lkm_caps_init();
 	if (ret)
@@ -134,17 +136,25 @@ static int __init droid_lkm_init(void)
 	 */
 	ds_hook_policy_apply();
 
-	ret = droid_lkm_pidns_init();
-	if (ret)
-		goto err_hk;
+	if (trusted) {
+		ret = droid_lkm_pidns_init();
+		if (ret)
+			goto err_hk;
+	} else {
+		droid_lkm_warn("pidns stays off: kernel layout not verified\n");
+	}
 
-	ret = droid_lkm_ipcns_init();
-	if (ret)
-		goto err_pidns;
+	if (trusted) {
+		ret = droid_lkm_ipcns_init();
+		if (ret)
+			goto err_pidns;
+	} else {
+		droid_lkm_warn("ipcns stays off: kernel layout not verified\n");
+	}
 
-
-
-	if (droid_lkm_mqueue_fs_init()) {
+	if (!trusted) {
+		droid_lkm_info("POSIX mqueue stays off: kernel layout not verified\n");
+	} else if (droid_lkm_mqueue_fs_init()) {
 		droid_lkm_info("POSIX mqueue stays off: %s\n",
 			       droid_lkm_caps.posix_mqueue.reason);
 	} else {
@@ -153,17 +163,29 @@ static int __init droid_lkm_init(void)
 	/* the mqueue owner is settled above, the rest were settled at caps_init */
 	droid_lkm_caps_report_features();
 
-	ret = droid_lkm_slot_init();
-	if (ret)
-		goto err_ipcns;
+	if (trusted) {
+		ret = droid_lkm_slot_init();
+		if (ret)
+			goto err_ipcns;
+	} else {
+		droid_lkm_warn("syscall slots stay off: kernel layout not verified\n");
+	}
 
-	ret = droid_lkm_proc_init();
-	if (ret)
-		goto err_slot;
+	if (trusted) {
+		ret = droid_lkm_proc_init();
+		if (ret)
+			goto err_slot;
+	} else {
+		droid_lkm_warn("proc ns view stays off: kernel layout not verified\n");
+	}
 
-	ret = droid_lkm_status_init();
-	if (ret)
-		droid_lkm_warn("NSpid emulation disabled: %d\n", ret);
+	if (trusted) {
+		ret = droid_lkm_status_init();
+		if (ret)
+			droid_lkm_warn("NSpid emulation disabled: %d\n", ret);
+	} else {
+		droid_lkm_info("NSpid emulation stays off: kernel layout not verified\n");
+	}
 
 	/* every install site has run by now, so this is the load's hook verdict */
 	ds_hook_report();

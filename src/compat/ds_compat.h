@@ -13,6 +13,9 @@ enum ds_compat_state {
 	DS_COMPAT_NO_TYPE,	/* the running kernel has no such struct in BTF */
 	DS_COMPAT_NO_MEMBER,	/* the struct is there, the member is not */
 	DS_COMPAT_DIFFERS,	/* both are there and the offset is not the build's */
+	DS_COMPAT_UNVERIFIED,	/* no backend answered for it */
+	DS_COMPAT_ANCHORED,	/* the anchor backend checked it at load */
+	DS_COMPAT_BUILD,	/* module owned struct, the build layout is the contract */
 };
 
 struct ds_compat_field {
@@ -59,6 +62,10 @@ int ds_compat_bind(const struct ds_compat_sym *tab, unsigned int count);
 int ds_compat_write(void *dst, unsigned long val);
 
 bool ds_compat_layout_init(struct ds_compat_layout *l);
+const char *ds_compat_state_name(u8 state);
+
+/* no BTF: verify the kernel owned structs against symbols, refuse the rest */
+bool ds_compat_layout_anchor(struct ds_compat_layout *l);
 void ds_compat_layout_report(struct ds_compat_layout *l);
 
 #endif

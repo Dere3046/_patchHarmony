@@ -454,9 +454,24 @@ static struct ctl_table_header *droid_lkm_ipc_global_header;
 
 static __nocfi noinline int droid_lkm_ipc_sysctls_host_setup(void)
 {
+	int i;
+
 	if (!droid_lkm_ks.register_sysctl) {
 		droid_lkm_warn("register_sysctl unavailable, the SysV limits stay unexposed\n");
 		return 0;
+	}
+
+	/*
+	 * the handlers relocate table->data from init_ipc_ns to the caller's
+	 * namespace, so the entries have to start from the init fields instead
+	 * of the NULL they carry in the shared table
+	 */
+	for (i = 0; i < DROID_LKM_IPC_SYSCTL_COUNT; i++) {
+		enum droid_lkm_field_id id = droid_lkm_ipc_sysctl_fields[i];
+
+		if (id == DROID_LKM_FIELD_COUNT)
+			continue;
+		droid_lkm_ipc_sysctls[i].data = DROID_LKM_INIT_NS_FIELD(id);
 	}
 
 	droid_lkm_sysctl_mni = IPCMNI;

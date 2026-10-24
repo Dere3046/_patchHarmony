@@ -13,7 +13,7 @@
  * the locked entry point moved twice, the Makefile picks this unit by what the
  * target kernel actually carries.
  */
-__nocfi noinline __nocfi noinline int droid_lkm_munmap_locked(struct mm_struct *mm, unsigned long start,
+__nocfi noinline int droid_lkm_munmap_locked(struct mm_struct *mm, unsigned long start,
 			    unsigned long end, struct list_head *uf)
 {
 	if (!droid_lkm_ks.__do_munmap)

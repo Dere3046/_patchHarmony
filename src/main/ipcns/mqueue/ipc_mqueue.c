@@ -1447,10 +1447,10 @@ retry:
 			}
 			/* 6.18 carries the fd form only */
 			if (droid_lkm_p_netlink_getsockbyfd)
-				sock = droid_lkm_p_netlink_getsockbyfd(
+				sock = droid_lkm_mq_netlink_getsockbyfd(
 					notification->sigev_signo);
 			else
-				sock = droid_lkm_p_netlink_getsockbyfilp(
+				sock = netlink_getsockbyfilp(
 					droid_lkm_fd_file(f));
 			fdput(f);
 			if (IS_ERR(sock)) {

@@ -36,6 +36,9 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_TASK_COMM,
 	DROID_LKM_F_TASK_NSPROXY,
 	DROID_LKM_F_TASK_THREAD_PID,
+	DROID_LKM_F_TASK_TASKS,
+	DROID_LKM_F_TASK_REAL_CRED,
+	DROID_LKM_F_TASK_CRED,
 	DROID_LKM_F_TASK_GROUP_LEADER,
 	DROID_LKM_F_TASK_REAL_PARENT,
 	DROID_LKM_F_TASK_SIGNAL,
@@ -79,8 +82,12 @@ enum droid_lkm_type_id {
 	DROID_LKM_TYPE_COUNT
 };
 
+struct seq_file;
+
 void droid_lkm_layout_init(void);
 void droid_lkm_layout_report(void);
+bool droid_lkm_layout_trusted(void);
+void droid_lkm_layout_show(struct seq_file *m);
 
 // running kernel sizeof or 0 when refused
 u32 droid_lkm_layout_type_size(enum droid_lkm_type_id id);

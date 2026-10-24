@@ -12,6 +12,7 @@
 #include "ds_caps.h"
 #include "ds_features.h"
 #include "ds_hook.h"
+#include "ds_ti.h"
 
 #ifdef CONFIG_PROC_FS
 static struct proc_dir_entry *droid_lkm_features_dir;
@@ -41,6 +42,9 @@ static int droid_lkm_features_show(struct seq_file *m, void *v)
 	droid_lkm_feature_line(m, "posix_mqueue", &caps->posix_mqueue);
 	droid_lkm_feature_line(m, "sysvipc", &caps->sysvipc);
 	droid_lkm_feature_line(m, "compat32", &caps->compat32);
+	seq_printf(m, "\nlayout trusted: %s\n",
+		   droid_lkm_layout_trusted() ? "yes" : "no");
+	droid_lkm_layout_show(m);
 	seq_puts(m, "\nhook                 route   state\n");
 	return ds_hook_enum(droid_lkm_features_hook, m);
 }
