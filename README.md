@@ -19,6 +19,10 @@ compatibility.
 | **6.12** | Android 16 | `android16-6.12` |
 | **6.18** | Android 17 | `android17-6.18` |
 
+## Contributors
+
+- [XGH2333](https://github.com/XGH2333) (O3 CPU support)
+
 ## Credits
 
 - [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) by ravindu644 — target container runtime
