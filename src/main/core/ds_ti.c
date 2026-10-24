@@ -15,6 +15,9 @@
 #include "ds.h"
 #include "ds_ti.h"
 #include "ds_compat.h"
+#ifdef DROID_LKM_LAYOUT_MANUAL
+#include "ds_layout_manual.h"
+#endif
 
 // build offset kept so a kernel that disagrees with the headers is visible
 #define DROID_LKM_FIELD(_id, _type, _member)                                   \
@@ -101,6 +104,72 @@ static struct ds_compat_layout droid_lkm_layout = {
 	.ntypes = ARRAY_SIZE(droid_lkm_types),
 };
 
+#ifdef DROID_LKM_LAYOUT_MANUAL
+struct droid_lkm_manual_field {
+	const char *type;
+	const char *member;
+	u32 off;
+};
+
+struct droid_lkm_manual_type {
+	const char *type;
+	u32 size;
+};
+
+static const struct droid_lkm_manual_field droid_lkm_manual_fields[] = {
+#define DROID_LKM_MANUAL_FIELD(_type, _member, _off) { #_type, #_member, _off },
+	DROID_LKM_MANUAL_OFFSETS(DROID_LKM_MANUAL_FIELD)
+#undef DROID_LKM_MANUAL_FIELD
+	{ NULL, NULL, 0 }
+};
+
+static const struct droid_lkm_manual_type droid_lkm_manual_types[] = {
+#define DROID_LKM_MANUAL_TYPE(_type, _size) { #_type, _size },
+	DROID_LKM_MANUAL_TYPES(DROID_LKM_MANUAL_TYPE)
+#undef DROID_LKM_MANUAL_TYPE
+	{ NULL, 0 }
+};
+
+static void droid_lkm_layout_manual(struct ds_compat_layout *l)
+{
+	unsigned int i, j;
+
+	for (i = 0; droid_lkm_manual_fields[i].type; i++) {
+		const struct droid_lkm_manual_field *m = &droid_lkm_manual_fields[i];
+		bool found = false;
+
+		for (j = 0; j < l->nfields; j++) {
+			if (strcmp(l->fields[j].type, m->type) ||
+			    strcmp(l->fields[j].member, m->member))
+				continue;
+			l->fields[j].live = m->off;
+			l->fields[j].state = DS_COMPAT_MANUAL;
+			found = true;
+			break;
+		}
+		if (!found)
+			pr_warn("[droid_lkm] manual table: %s.%s not in the layout\n",
+				m->type, m->member);
+	}
+	for (i = 0; droid_lkm_manual_types[i].type; i++) {
+		const struct droid_lkm_manual_type *m = &droid_lkm_manual_types[i];
+		bool found = false;
+
+		for (j = 0; j < l->ntypes; j++) {
+			if (strcmp(l->types[j].name, m->type))
+				continue;
+			l->types[j].live = m->size;
+			l->types[j].state = DS_COMPAT_MANUAL;
+			found = true;
+			break;
+		}
+		if (!found)
+			pr_warn("[droid_lkm] manual table: sizeof(%s) not in the layout\n",
+				m->type);
+	}
+}
+#endif
+
 static bool droid_lkm_layout_trusted_flag;
 
 static bool droid_lkm_layout_verified(u8 state)
@@ -108,6 +177,10 @@ static bool droid_lkm_layout_verified(u8 state)
 	if (state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
 	    state == DS_COMPAT_ANCHORED)
 		return true;
+#ifdef DROID_LKM_LAYOUT_MANUAL
+	if (state == DS_COMPAT_MANUAL)
+		return true;
+#endif
 #if defined(DROID_LKM_LAYOUT_FALLBACK) || defined(DROID_LKM_LAYOUT_FORCE_BUILD)
 	return state == DS_COMPAT_BUILD;
 #else
@@ -221,6 +294,9 @@ void droid_lkm_layout_init(void)
 #elif defined(DROID_LKM_LAYOUT_FALLBACK)
 	ds_compat_layout_fallback(&droid_lkm_layout);
 #endif
+#ifdef DROID_LKM_LAYOUT_MANUAL
+	droid_lkm_layout_manual(&droid_lkm_layout);
+#endif
 	droid_lkm_layout_trusted_flag = droid_lkm_layout_required_ok();
 	if (!droid_lkm_layout_trusted_flag)
 		pr_warn("[droid_lkm] layout: kernel owned fields are not verified, namespace features stay off\n");
@@ -262,7 +338,8 @@ u32 droid_lkm_layout_off(enum droid_lkm_field_id id)
 static bool droid_lkm_layout_state_ok(u8 state)
 {
 	return state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
-	       state == DS_COMPAT_ANCHORED || state == DS_COMPAT_BUILD;
+	       state == DS_COMPAT_ANCHORED || state == DS_COMPAT_MANUAL ||
+	       state == DS_COMPAT_BUILD;
 }
 
 bool droid_lkm_layout_ok(enum droid_lkm_field_id id)

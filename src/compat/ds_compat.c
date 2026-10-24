@@ -129,6 +129,8 @@ const char *ds_compat_state_name(u8 state)
 		return "anchored";
 	case DS_COMPAT_VERIFIED:
 		return "verified";
+	case DS_COMPAT_MANUAL:
+		return "manual";
 	case DS_COMPAT_BUILD:
 		return "build";
 	default:
@@ -275,7 +277,7 @@ void ds_compat_layout_force_build(struct ds_compat_layout *l)
 
 void ds_compat_layout_report(struct ds_compat_layout *l)
 {
-	unsigned int btf = 0, anchor = 0, build = 0, i;
+	unsigned int btf = 0, anchor = 0, manual = 0, build = 0, i;
 
 	if (!l)
 		return;
@@ -286,6 +288,8 @@ void ds_compat_layout_report(struct ds_compat_layout *l)
 		else if (l->fields[i].state == DS_COMPAT_ANCHORED ||
 			 l->fields[i].state == DS_COMPAT_VERIFIED)
 			anchor++;
+		else if (l->fields[i].state == DS_COMPAT_MANUAL)
+			manual++;
 		else if (l->fields[i].state == DS_COMPAT_BUILD)
 			build++;
 	}
@@ -297,8 +301,9 @@ void ds_compat_layout_report(struct ds_compat_layout *l)
 				       l->types[i].build);
 	}
 
-	ds_compat_info("layout: %u/%u offsets verified (%u btf, %u anchor, %u build)\n",
-		       btf + anchor + build, l->nfields, btf, anchor, build);
+	ds_compat_info("layout: %u/%u offsets verified (%u btf, %u anchor, %u manual, %u build)\n",
+		       btf + anchor + manual + build, l->nfields, btf, anchor,
+		       manual, build);
 
 	for (i = 0; i < l->nfields; i++) {
 		const struct ds_compat_field *f = &l->fields[i];

@@ -16,6 +16,7 @@ enum ds_compat_state {
 	DS_COMPAT_UNVERIFIED,	/* no backend answered for it */
 	DS_COMPAT_ANCHORED,	/* the anchor backend found it */
 	DS_COMPAT_VERIFIED,	/* an anchor or a cross check confirmed it */
+	DS_COMPAT_MANUAL,	/* a build time table supplied the offset */
 	DS_COMPAT_BUILD,	/* module owned struct, or the build fallback */
 };
 
