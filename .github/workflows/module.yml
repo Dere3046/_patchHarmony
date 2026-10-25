@@ -1,7 +1,4 @@
 name: Module zip
-
-# builds the same kernels build.yml does, then packs them into one flashable
-# zip. separate from build.yml so a normal push only runs one matrix.
 on:
   workflow_dispatch:
   push:
@@ -27,12 +24,23 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch deps
-        run: scripts/fetch-deps.sh
+        env:
+          KMSDK_TOKEN: ${{ secrets.KMSDK_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
+          scripts/fetch-deps.sh
 
       - name: Build ${{ matrix.kmi }}
         run: |
           make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
           tail -5 build.log
+
+      - name: Zero warning gate
+        run: |
+          if grep -nE "error:|warning:" build.log; then
+            echo "build log is not clean"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -40,12 +48,12 @@ jobs:
           path: |
             out/${{ matrix.kmi }}/droid_lkm.ko
             out/${{ matrix.kmi }}/droid_lkm_vendor.ko
-          if-no-files-found: error
+          if-no-files-found: warn
 
   package:
     needs: build
-    # a kernel that fails to build should not cost the whole zip
-    if: always()
+    
+    if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -66,6 +74,10 @@ jobs:
             cp "$d"/*.ko "out/$k/"
             echo "$k: $(ls "out/$k" | tr '\n' ' ')"
           done
+          if [ -z "$(ls -A out)" ]; then
+            echo "no ko collected, nothing to package"
+            exit 1
+          fi
 
       - name: Package
         run: |
