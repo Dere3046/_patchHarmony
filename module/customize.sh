@@ -35,11 +35,23 @@ case "$(printf '%s %s %s %s %s' "$BRAND" "$MANUF" "$MODEL" "$FP" "$DEV" | tr 'A-
 *oppo* | *oneplus* | *realme* | *oplus*) OPLUS=1 ;;
 esac
 
-# 内核没带 androidNN 时用系统版本兜底
+# 首发 API 等级 -> androidNN；15 起板级等级可能是 202404 这种年月格式
+api_tag() {
+	case $1 in
+	31 | 32) echo android12 ;;
+	3[3-9] | 4[0-9]) echo "android$(($1 - 20))" ;;
+	20[2-9][0-9][0-9][0-9]) echo "android$((${1%??} - 2009))" ;;
+	esac
+}
+
+# 内核没带 androidNN 时用首发等级兜底：KMI 跟首发走，系统版本会随 OTA 升上去
 TAG_SRC=kernel
 if [ -z "$ANDROID_TAG" ]; then
-	ANDROID_TAG=$(getprop ro.build.version.release 2>/dev/null | sed -n 's/^\([0-9][0-9]*\).*/android\1/p')
-	if [ -n "$ANDROID_TAG" ]; then TAG_SRC=props; else TAG_SRC=none; fi
+	TAG_SRC=none
+	for p in ro.board.first_api_level ro.product.first_api_level; do
+		ANDROID_TAG=$(api_tag "$(getprop "$p" 2>/dev/null)")
+		[ -n "$ANDROID_TAG" ] && { TAG_SRC=$p; break; }
+	done
 fi
 
 # 必须 androidNN + 主次版本同时匹配，不跨标签猜
@@ -78,7 +90,7 @@ if [ -n "$OVERRIDE" ]; then
 fi
 
 if [ -z "$BEST" ]; then
-	abort "! no build matches kernel $RELEASE (android=${ANDROID_TAG:-?}, kver=${MAJOR_MINOR:-?}); this zip has:$ALL
+	abort "! no build matches kernel $RELEASE (android=${ANDROID_TAG:-?} from $TAG_SRC, kver=${MAJOR_MINOR:-?}); this zip has:$ALL
 ! if you know the right one, set kmi_override in config.conf and repack"
 fi
 if [ -n "$TIE" ]; then
