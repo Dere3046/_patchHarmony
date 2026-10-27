@@ -223,8 +223,6 @@ else
 		"skip_sysvipc=$(bool skip_sysvipc 0)" \
 		"no_fake_ns=$(bool no_fake_ns 0)" \
 		"skip_do_exit=$(bool skip_do_exit 0)" \
-		"inline_hook=$(bool inline_hook 1)" \
-		"write_path=$(bool write_path 0)" \
 		"degrade=$(bool degrade 0)"
 	rc=$?
 
@@ -260,8 +258,7 @@ else
 	guarded_insmod "$COMPAT" \
 		"ghost=$(bool ghost 1)" \
 		"ghost_match=$(conf ghost_match oplus_)" \
-		"pid_max_cap=$(sint pid_max_cap 0)" \
-		"inline_hook=$(bool inline_hook 1)"
+		"pid_max_cap=$(sint pid_max_cap 0)"
 	rc=$?
 	if [ "$rc" -eq 0 ] && loaded droid_lkm_vendor; then
 		ph_log "droid_lkm_vendor loaded"
