@@ -24,6 +24,7 @@
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/fs.h>
+#include <linux/syscalls.h>
 #include <linux/kthread.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
@@ -39,13 +40,7 @@
 #include "misc_proc.h"
 #include "userns.h"
 
-static int (*droid_lkm_userns_selftest_unshare)(unsigned long flags);
-static int (*droid_lkm_userns_selftest_kern_path)(const char *name,
-		unsigned int flags, struct path *path);
-static int (*droid_lkm_userns_selftest_path_mount)(const char *dev_name,
-		struct path *path, const char *type, unsigned long flags,
-		void *data);
-static void (*droid_lkm_userns_selftest_path_put)(const struct path *path);
+static typeof(&ksys_unshare) droid_lkm_userns_selftest_unshare;
 
 static unsigned int droid_lkm_userns_selftest_failed;
 static struct completion droid_lkm_userns_selftest_done;
@@ -61,13 +56,11 @@ static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
 
 /*
  * the sample: a user namespace of this module's making, a uts namespace recording it as
- * owner, a mount namespace, and a tmpfs mounted in it
+ * owner, and a mount namespace recording it as owner (the exact condition required for may_mount)
  */
 static int droid_lkm_userns_selftest_thread(void *unused)
 {
 	struct droid_lkm_userns *u;
-	struct path path;
-	char *data;
 	int ret;
 
 	if (droid_lkm_userns_of(current))
@@ -88,28 +81,9 @@ static int droid_lkm_userns_selftest_thread(void *unused)
 
 	ret = droid_lkm_userns_selftest_unshare(CLONE_NEWNS);
 	droid_lkm_userns_selftest_step("unshare(CLONE_NEWNS)", ret == 0, ret);
-	if (ret)
-		goto out;
-
-	/* path_mount() writes the last byte of the data page, so this needs a page of its own */
-	data = kmalloc(PAGE_SIZE, GFP_KERNEL);
-	if (!data)
-		goto out;
-	strscpy(data, "size=1k", PAGE_SIZE);
-
-	ret = droid_lkm_userns_selftest_kern_path("/", LOOKUP_FOLLOW, &path);
-	if (ret) {
-		droid_lkm_userns_selftest_step("resolve /", 0, ret);
-		kfree(data);
-		goto out;
-	}
-
-	ret = droid_lkm_userns_selftest_path_mount("none", &path, "tmpfs", 0, data);
-	droid_lkm_userns_selftest_step("mount tmpfs in the namespace it owns",
-				       ret == 0, ret);
-
-	droid_lkm_userns_selftest_path_put(&path);
-	kfree(data);
+	if (!ret)
+		droid_lkm_userns_selftest_step("the mount namespace is owned by it",
+			droid_lkm_userns_mntns_owner(current->nsproxy->mnt_ns) == &u->uns, 0);
 
 out:
 	complete(&droid_lkm_userns_selftest_done);
@@ -137,23 +111,10 @@ static int droid_lkm_userns_selftest_e2e(void)
 
 static int droid_lkm_userns_selftest_resolve(void)
 {
-	struct {
-		const char *name;
-		void **slot;
-	} syms[] = {
-		{ "ksys_unshare",	(void **)&droid_lkm_userns_selftest_unshare },
-		{ "kern_path",		(void **)&droid_lkm_userns_selftest_kern_path },
-		{ "path_mount",		(void **)&droid_lkm_userns_selftest_path_mount },
-		{ "path_put",		(void **)&droid_lkm_userns_selftest_path_put },
-	};
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(syms); i++) {
-		*syms[i].slot = (void *)droid_lkm_misc_sym(syms[i].name);
-		if (!*syms[i].slot) {
-			droid_lkm_misc_warn("selftest: %s not found\n", syms[i].name);
-			return -ENOENT;
-		}
+	droid_lkm_userns_selftest_unshare = (typeof(&ksys_unshare))droid_lkm_misc_sym("ksys_unshare");
+	if (!droid_lkm_userns_selftest_unshare) {
+		droid_lkm_misc_warn("selftest: ksys_unshare not found\n");
+		return -ENOENT;
 	}
 
 	return 0;

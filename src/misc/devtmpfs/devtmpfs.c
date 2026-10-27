@@ -58,7 +58,11 @@
 #include <linux/mount.h>
 #include <uapi/linux/mount.h>
 #include <linux/stat.h>
+#include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
 #include <linux/mnt_idmapping.h>
+#include <drivers/base/base.h>
+#endif
 
 #include "misc.h"
 #include "misc_ksym.h"
@@ -67,37 +71,33 @@
 #include "devtmpfs.h"
 
 struct droid_lkm_devtmpfs_ksym {
-	struct vfsmount *(*vfs_kern_mount)(struct file_system_type *type, int flags,
-					   const char *name, void *data);
-	int (*register_filesystem)(struct file_system_type *fs);
-	int (*unregister_filesystem)(struct file_system_type *fs);
-	int (*reconfigure_single)(struct super_block *s, int flags, void *data);
-	void (*deactivate_locked_super)(struct super_block *s);
-	void (*kern_unmount)(struct vfsmount *mnt);
-	int (*shmem_init_fs_context)(struct fs_context *fc);
-	void (*kill_litter_super)(struct super_block *sb);
+	typeof(&vfs_kern_mount)		vfs_kern_mount;
+	typeof(&register_filesystem)	register_filesystem;
+	typeof(&unregister_filesystem)	unregister_filesystem;
+	typeof(&reconfigure_single)	reconfigure_single;
+	typeof(&deactivate_locked_super) deactivate_locked_super;
+	typeof(&kern_unmount)		kern_unmount;
+	typeof(&shmem_init_fs_context)	shmem_init_fs_context;
+	typeof(&kill_litter_super)	kill_litter_super;
 
-	struct dentry *(*lookup_one_len)(const char *name, struct dentry *base, int len);
+	typeof(&lookup_one_len)		lookup_one_len;
 	/* namespaced export (VFS_internal_...), so resolved rather than imported */
-	struct dentry *(*dget_parent)(struct dentry *dentry);
-	int (*vfs_mknod)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, umode_t mode, dev_t dev);
-	int (*vfs_mkdir)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry, umode_t mode);
-	int (*notify_change)(struct mnt_idmap *idmap, struct dentry *dentry,
-			     struct iattr *attr, struct inode **delegated_inode);
-	int (*vfs_unlink)(struct mnt_idmap *idmap, struct inode *dir,
-			  struct dentry *dentry, struct inode **delegated_inode);
-	int (*vfs_rmdir)(struct mnt_idmap *idmap, struct inode *dir,
-			 struct dentry *dentry);
-	int (*vfs_getattr)(const struct path *path, struct kstat *stat,
-			   u32 request_mask, unsigned int query_flags);
+	typeof(&dget_parent)		dget_parent;
+	typeof(&vfs_mknod)		vfs_mknod;
+	typeof(&vfs_mkdir)		vfs_mkdir;
+	typeof(&notify_change)		notify_change;
+	typeof(&vfs_unlink)		vfs_unlink;
+	typeof(&vfs_rmdir)		vfs_rmdir;
+	typeof(&vfs_getattr)		vfs_getattr;
 
-	const char *(*device_get_devnode)(const struct device *dev, umode_t *mode,
-					  kuid_t *uid, kgid_t *gid, const char **tmp);
-	const struct class *block_class;
+	typeof(&device_get_devnode)	device_get_devnode;
+	/* the worker creates nodes as the loader, not as the kernel domain */
+	typeof(&get_task_cred)		get_task_cred;
+	typeof(&override_creds)		override_creds;
+	typeof(&revert_creds)		revert_creds;
+	const struct class		*block_class;
 	/* every device the driver core knows, walked once to fill the tree */
-	struct kset *devices_kset;
+	struct kset			*devices_kset;
 };
 
 static struct droid_lkm_devtmpfs_ksym droid_lkm_devtmpfs_ks;
@@ -106,6 +106,7 @@ static struct task_struct *droid_lkm_devtmpfs_thread;
 static struct vfsmount *droid_lkm_devtmpfs_mnt;
 static bool droid_lkm_devtmpfs_registered;
 static unsigned long droid_lkm_devtmpfs_nodes;
+static const struct cred *droid_lkm_devtmpfs_node_cred;
 
 static struct hk_inline droid_lkm_devtmpfs_add_hook;
 static struct hk_inline droid_lkm_devtmpfs_del_hook;
@@ -155,15 +156,27 @@ static struct dentry *droid_lkm_devtmpfs_public_mount(struct file_system_type *f
 	/* one instance for the whole system, the internal superblock */
 	s = droid_lkm_devtmpfs_mnt->mnt_sb;
 	atomic_inc(&s->s_active);
-	down_write(&s->s_umount);
+	if (down_write_killable(&s->s_umount)) {
+		droid_lkm_misc_warn("devtmpfs: mount interrupted waiting for s_umount\n");
+		atomic_dec(&s->s_active);
+		mutex_unlock(&droid_lkm_devtmpfs_lock);
+		return ERR_PTR(-EINTR);
+	}
+
 	err = droid_lkm_devtmpfs_ks.reconfigure_single(s, flags, data);
 	if (err < 0) {
-		droid_lkm_devtmpfs_ks.deactivate_locked_super(s);
+		atomic_dec(&s->s_active);
+		up_write(&s->s_umount);
 		mutex_unlock(&droid_lkm_devtmpfs_lock);
 		return ERR_PTR(err);
 	}
 
 	root = dget(s->s_root);
+	/*
+	 * the write lock stays held, and that is the contract this callback is
+	 * called under: the VFS expects get_tree to return with s_umount write-locked
+	 * and releases it itself via up_write(&sb->s_umount) in do_new_mount_fc().
+	 */
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
 
 	return root;
@@ -269,6 +282,23 @@ static void droid_lkm_devtmpfs_drain(void)
 	}
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
+static inline struct mnt_idmap *droid_lkm_devtmpfs_idmap(void)
+{
+	return (struct mnt_idmap *)droid_lkm_misc_ks.nop_mnt_idmap;
+}
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+static inline struct user_namespace *droid_lkm_devtmpfs_idmap(void)
+{
+	return &init_user_ns;
+}
+#else
+static inline void *droid_lkm_devtmpfs_idmap(void)
+{
+	return NULL;
+}
+#endif
+
 /* walk the name inside the internal mount, create dirs, return the leaf length and its parent */
 static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_out,
 				     const char **leaf_out)
@@ -278,9 +308,17 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 	int err = 0;
 
 	for (;;) {
-		const char *slash = strchr(s, '/');
-		int len = slash ? (int)(slash - s) : (int)strlen(s);
+		const char *slash;
+		int len;
 		struct dentry *next;
+
+		if (!parent || !d_inode(parent)) {
+			err = -ENOTDIR;
+			break;
+		}
+
+		slash = strchr(s, '/');
+		len = slash ? (int)(slash - s) : (int)strlen(s);
 
 		if (!len) {
 			err = -EINVAL;
@@ -303,7 +341,7 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 		}
 
 		if (d_really_is_negative(next)) {
-			err = droid_lkm_devtmpfs_ks.vfs_mkdir(&nop_mnt_idmap,
+			err = droid_lkm_devtmpfs_ks.vfs_mkdir(droid_lkm_devtmpfs_idmap(),
 							      d_inode(parent), next,
 							      0755);
 			if (!err)
@@ -312,11 +350,11 @@ static int droid_lkm_devtmpfs_parent(const char *name, struct dentry **parent_ou
 		}
 		inode_unlock(d_inode(parent));
 
-		dput(parent);
 		if (err) {
 			dput(next);
 			break;
 		}
+		dput(parent);
 
 		parent = next;
 		s = slash + 1;
@@ -345,7 +383,7 @@ static int droid_lkm_devtmpfs_handle_create(const char *nodename, umode_t mode,
 		goto out_unlock;
 	}
 
-	err = droid_lkm_devtmpfs_ks.vfs_mknod(&nop_mnt_idmap, d_inode(parent), dentry,
+	err = droid_lkm_devtmpfs_ks.vfs_mknod(droid_lkm_devtmpfs_idmap(), d_inode(parent), dentry,
 					      mode, dev->devt);
 	if (!err) {
 		struct iattr newattrs;
@@ -356,7 +394,7 @@ static int droid_lkm_devtmpfs_handle_create(const char *nodename, umode_t mode,
 		newattrs.ia_valid = ATTR_MODE | ATTR_UID | ATTR_GID;
 		/* notify_change wants the affected inode locked by its caller */
 		inode_lock(d_inode(dentry));
-		droid_lkm_devtmpfs_ks.notify_change(&nop_mnt_idmap, dentry, &newattrs,
+		droid_lkm_devtmpfs_ks.notify_change(droid_lkm_devtmpfs_idmap(), dentry, &newattrs,
 						    NULL);
 		inode_unlock(d_inode(dentry));
 
@@ -388,7 +426,7 @@ static void droid_lkm_devtmpfs_prune(struct dentry *dir)
 
 		up = droid_lkm_devtmpfs_ks.dget_parent(dir);
 		inode_lock_nested(d_inode(up), I_MUTEX_PARENT);
-		err = droid_lkm_devtmpfs_ks.vfs_rmdir(&nop_mnt_idmap, d_inode(up), dir);
+		err = droid_lkm_devtmpfs_ks.vfs_rmdir(droid_lkm_devtmpfs_idmap(), d_inode(up), dir);
 		inode_unlock(d_inode(up));
 
 		dput(dir);
@@ -459,11 +497,11 @@ static int droid_lkm_devtmpfs_handle_remove(const char *nodename, struct device 
 			newattrs.ia_mode = stat.mode & ~0777;
 			newattrs.ia_valid = ATTR_UID | ATTR_GID | ATTR_MODE;
 			inode_lock(d_inode(dentry));
-			droid_lkm_devtmpfs_ks.notify_change(&nop_mnt_idmap, dentry,
+			droid_lkm_devtmpfs_ks.notify_change(droid_lkm_devtmpfs_idmap(), dentry,
 							    &newattrs, NULL);
 			inode_unlock(d_inode(dentry));
 
-			err = droid_lkm_devtmpfs_ks.vfs_unlink(&nop_mnt_idmap,
+			err = droid_lkm_devtmpfs_ks.vfs_unlink(droid_lkm_devtmpfs_idmap(),
 							       d_inode(parent), dentry,
 							       NULL);
 			if (!err || err == -ENOENT) {
@@ -498,6 +536,11 @@ static int droid_lkm_devtmpfs_handle(const char *name, umode_t mode, kuid_t uid,
 
 static int droid_lkm_devtmpfs_thread_fn(void *p)
 {
+	const struct cred *old_cred = NULL;
+
+	if (droid_lkm_devtmpfs_ks.override_creds && droid_lkm_devtmpfs_node_cred)
+		old_cred = droid_lkm_devtmpfs_ks.override_creds(droid_lkm_devtmpfs_node_cred);
+
 	while (!kthread_should_stop()) {
 		spin_lock(&droid_lkm_devtmpfs_req_lock);
 		while (droid_lkm_devtmpfs_requests) {
@@ -520,6 +563,10 @@ static int droid_lkm_devtmpfs_thread_fn(void *p)
 		spin_unlock(&droid_lkm_devtmpfs_req_lock);
 		schedule();
 	}
+	__set_current_state(TASK_RUNNING);
+
+	if (droid_lkm_devtmpfs_ks.revert_creds && old_cred)
+		droid_lkm_devtmpfs_ks.revert_creds(old_cred);
 
 	return 0;
 }
@@ -612,6 +659,9 @@ static int droid_lkm_devtmpfs_resolve(void)
 		{ "vfs_rmdir",		(void **)&droid_lkm_devtmpfs_ks.vfs_rmdir },
 		{ "vfs_getattr",	(void **)&droid_lkm_devtmpfs_ks.vfs_getattr },
 		{ "device_get_devnode",	(void **)&droid_lkm_devtmpfs_ks.device_get_devnode },
+		{ "get_task_cred",	(void **)&droid_lkm_devtmpfs_ks.get_task_cred },
+		{ "override_creds",	(void **)&droid_lkm_devtmpfs_ks.override_creds },
+		{ "revert_creds",	(void **)&droid_lkm_devtmpfs_ks.revert_creds },
 		{ "block_class",	(void **)&droid_lkm_devtmpfs_ks.block_class },
 	};
 	unsigned long devices_kset;
@@ -672,6 +722,15 @@ int droid_lkm_misc_devtmpfs_init(void)
 	}
 	droid_lkm_devtmpfs_registered = true;
 
+	if (droid_lkm_devtmpfs_ks.get_task_cred) {
+		droid_lkm_devtmpfs_node_cred = droid_lkm_devtmpfs_ks.get_task_cred(current);
+		if (!droid_lkm_devtmpfs_node_cred) {
+			err = -ENOMEM;
+			droid_lkm_misc_err("devtmpfs: cannot take loader credentials\n");
+			goto out_unregister;
+		}
+	}
+
 	droid_lkm_devtmpfs_thread = kthread_run(droid_lkm_devtmpfs_thread_fn, NULL,
 						"ddevtmpfs");
 	if (IS_ERR(droid_lkm_devtmpfs_thread)) {
@@ -679,7 +738,7 @@ int droid_lkm_misc_devtmpfs_init(void)
 		droid_lkm_devtmpfs_thread = NULL;
 		droid_lkm_misc_err("devtmpfs: no thread: %d\n", err);
 		droid_lkm_misc_report("devtmpfs", "unsupported", "no thread");
-		goto out_unregister;
+		goto out_creds;
 	}
 
 	err = hk_inline_hook(&droid_lkm_devtmpfs_add_hook, "device_add",
@@ -715,6 +774,11 @@ out_unhook_add:
 out_stop:
 	kthread_stop(droid_lkm_devtmpfs_thread);
 	droid_lkm_devtmpfs_thread = NULL;
+out_creds:
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
+	}
 out_unregister:
 	droid_lkm_devtmpfs_ks.unregister_filesystem(&droid_lkm_devtmpfs_type);
 	droid_lkm_devtmpfs_registered = false;
@@ -724,53 +788,7 @@ out_unmount:
 	return err;
 }
 
-/* drop the internal mount so the superblock can die and release the module ref */
-int droid_lkm_misc_devtmpfs_release(void)
-{
-	if (!droid_lkm_devtmpfs_mnt && !droid_lkm_devtmpfs_registered) {
-		droid_lkm_misc_report("devtmpfs", "released", "already released");
-		return 0;
-	}
-
-	if (droid_lkm_devtmpfs_del_orig) {
-		hk_inline_unhook(&droid_lkm_devtmpfs_del_hook);
-		droid_lkm_devtmpfs_del_orig = NULL;
-	}
-	if (droid_lkm_devtmpfs_add_orig) {
-		hk_inline_unhook(&droid_lkm_devtmpfs_add_hook);
-		droid_lkm_devtmpfs_add_orig = NULL;
-	}
-
-	mutex_lock(&droid_lkm_devtmpfs_lock);
-
-	if (droid_lkm_devtmpfs_thread) {
-		struct task_struct *thread = droid_lkm_devtmpfs_thread;
-
-		/* clear first, submit() must not queue behind a dead thread */
-		droid_lkm_devtmpfs_thread = NULL;
-		kthread_stop(thread);
-		droid_lkm_devtmpfs_drain();
-	}
-
-	if (droid_lkm_devtmpfs_registered) {
-		droid_lkm_devtmpfs_ks.unregister_filesystem(&droid_lkm_devtmpfs_type);
-		droid_lkm_devtmpfs_registered = false;
-	}
-
-	if (droid_lkm_devtmpfs_mnt) {
-		droid_lkm_devtmpfs_ks.kern_unmount(droid_lkm_devtmpfs_mnt);
-		droid_lkm_devtmpfs_mnt = NULL;
-	}
-
-	mutex_unlock(&droid_lkm_devtmpfs_lock);
-
-	droid_lkm_misc_report("devtmpfs", "released", "internal mount dropped");
-	droid_lkm_misc_info("devtmpfs released\n");
-
-	return 0;
-}
-
-void droid_lkm_misc_devtmpfs_exit(void)
+static void droid_lkm_devtmpfs_teardown(void)
 {
 	int err;
 
@@ -788,14 +806,18 @@ void droid_lkm_misc_devtmpfs_exit(void)
 	if (droid_lkm_devtmpfs_thread) {
 		struct task_struct *thread = droid_lkm_devtmpfs_thread;
 
-		/* clear it first: submit() must not queue behind a dead thread */
+		/* clear first: submit() must not queue behind a dead thread */
 		droid_lkm_devtmpfs_thread = NULL;
 		kthread_stop(thread);
 		droid_lkm_devtmpfs_drain();
 	}
 
+	if (droid_lkm_devtmpfs_node_cred) {
+		put_cred(droid_lkm_devtmpfs_node_cred);
+		droid_lkm_devtmpfs_node_cred = NULL;
+	}
+
 	if (droid_lkm_devtmpfs_registered) {
-		/* reaching exit means no mount is left, this only reports a never registered type */
 		err = droid_lkm_devtmpfs_ks.unregister_filesystem(&droid_lkm_devtmpfs_type);
 		if (err)
 			droid_lkm_misc_warn("devtmpfs: unregister: %d\n", err);
@@ -808,4 +830,25 @@ void droid_lkm_misc_devtmpfs_exit(void)
 	}
 
 	mutex_unlock(&droid_lkm_devtmpfs_lock);
+}
+
+/* drop the internal mount so the superblock can die and release the module ref */
+int droid_lkm_misc_devtmpfs_release(void)
+{
+	if (!droid_lkm_devtmpfs_mnt && !droid_lkm_devtmpfs_registered) {
+		droid_lkm_misc_report("devtmpfs", "released", "already released");
+		return 0;
+	}
+
+	droid_lkm_devtmpfs_teardown();
+
+	droid_lkm_misc_report("devtmpfs", "released", "internal mount dropped");
+	droid_lkm_misc_info("devtmpfs released\n");
+
+	return 0;
+}
+
+void droid_lkm_misc_devtmpfs_exit(void)
+{
+	droid_lkm_devtmpfs_teardown();
 }

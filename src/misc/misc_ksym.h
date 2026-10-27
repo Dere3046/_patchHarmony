@@ -7,7 +7,14 @@
 #define DROID_LKM_MISC_KSYM_H
 
 #include <linux/types.h>
+#include <linux/cred.h>
+#include <linux/key.h>
+#include <linux/proc_ns.h>
+#include <linux/nsproxy.h>
 #include <linux/netfilter/x_tables.h>
+#include <linux/netfilter_ipv6.h>
+#include <net/route.h>
+#include <net/ipv6.h>
 
 struct net;
 struct net_device;
@@ -17,6 +24,7 @@ struct in6_addr;
 struct cred;
 struct key;
 struct mnt_idmap;
+struct user_namespace;
 struct nsproxy;
 struct fs_struct;
 struct task_struct;
@@ -25,29 +33,34 @@ struct droid_lkm_ns_kind_reg;
 /*
  * CONFIG_TRIM_UNUSED_KSYMS and the vendor abi_symbollist mean an exported symbol is not
  * necessarily in the ksymtab. everything is resolved by name, a missing thunk disables the
- * feature that needs it and never becomes an unresolved import
+ * feature that needs it and never becomes an unresolved import.
+ *
+ * a thunk's type is the kernel's own, taken with typeof(&symbol) from the declaration this
+ * build is compiling against. clang's cfi hashes the whole function type at an indirect call,
+ * so a prototype written out by hand here is a fatal cfi failure on the device the moment it
+ * drifts by one qualifier, and a warning never gets there first.
+ *
+ * the two that are still written out are the ones with no declaration to copy: the kernel
+ * defines create_new_namespaces in kernel/nsproxy.c and never declares it in a header, and
+ * the ns_kind pair is this module's own export.
  */
 struct droid_lkm_misc_ksym {
 	/* xt */
-	int (*xt_register_matches)(struct xt_match *match, unsigned int n);
-	void (*xt_unregister_matches)(struct xt_match *match, unsigned int n);
-	unsigned int (*inet_dev_addr_type)(struct net *net,
-					   const struct net_device *dev,
-					   __be32 addr);
-	bool (*ipv6_chk_addr)(struct net *net, const struct in6_addr *addr,
-			      const struct net_device *dev, int strict);
-	int (*__ipv6_addr_type)(const struct in6_addr *addr);
-	int (*__nf_ip6_route)(struct net *net, struct dst_entry **dst,
-			      struct flowi *fl, bool strict);
+	typeof(&xt_register_matches)	xt_register_matches;
+	typeof(&xt_unregister_matches)	xt_unregister_matches;
+	typeof(&inet_dev_addr_type)	inet_dev_addr_type;
+	typeof(&ipv6_chk_addr)		ipv6_chk_addr;
+	typeof(&__ipv6_addr_type)	__ipv6_addr_type;
+	typeof(&__nf_ip6_route)		__nf_ip6_route;
 
 	/* fake namespaces */
-	int (*proc_alloc_inum)(unsigned int *inum);
-	void (*proc_free_inum)(unsigned int inum);
-	struct cred *(*prepare_creds)(void);
-	int (*commit_creds)(struct cred *new);
-	void (*key_put)(struct key *key);
+	typeof(&proc_alloc_inum)	proc_alloc_inum;
+	typeof(&proc_free_inum)		proc_free_inum;
+	typeof(&prepare_creds)		prepare_creds;
+	typeof(&commit_creds)		commit_creds;
+	typeof(&key_put)		key_put;
 
-	/* optional main module entry points */
+	/* optional main module entry points, exported by droid_lkm.ko itself */
 	int (*ns_kind_register)(const struct droid_lkm_ns_kind_reg *kind);
 	void (*ns_kind_unregister)(const struct droid_lkm_ns_kind_reg *kind);
 

@@ -69,10 +69,16 @@ static const struct proc_ns_operations *droid_lkm_userns_mnt_ops;
 static droid_lkm_userns_owner_t droid_lkm_userns_mnt_owner;
 static unsigned int droid_lkm_userns_mnt_off;
 
+static unsigned long droid_lkm_userns_kernel_base;
+
 static bool droid_lkm_userns_is_text(unsigned long addr)
 {
-	return addr >= kernel_base && addr - kernel_base < DROID_LKM_USERNS_TEXT_WIN &&
-	       !(addr & (sizeof(void *) - 1));
+	if (droid_lkm_userns_kernel_base)
+		return addr >= droid_lkm_userns_kernel_base &&
+		       addr - droid_lkm_userns_kernel_base < DROID_LKM_USERNS_TEXT_WIN &&
+		       !(addr & (sizeof(u32) - 1));
+
+	return addr >= 0xffff000000000000UL && !(addr & (sizeof(u32) - 1));
 }
 
 /*
@@ -91,17 +97,27 @@ static int droid_lkm_userns_mnt_ops_resolve(void)
 		return -ENOENT;
 	}
 
-	if (safe_read(&ops, (void *)addr, sizeof(ops)))
+	if (safe_read(&ops, (void *)addr, sizeof(ops))) {
+		droid_lkm_misc_warn("mntns_operations safe_read failed\n");
 		return -EFAULT;
+	}
 
-	if (!ops.name || safe_read(text, ops.name, 4) || memcmp(text, "mnt", 4))
+	if (!ops.name || safe_read(text, ops.name, 4) || memcmp(text, "mnt", 3)) {
+		droid_lkm_misc_warn("mntns_operations name mismatch: text='%s'\n", text);
 		return -EINVAL;
+	}
 
-	if (ops.type != CLONE_NEWNS)
+	if (ops.type != CLONE_NEWNS) {
+		droid_lkm_misc_warn("mntns_operations type mismatch: type=0x%x expected=0x%x\n",
+				    ops.type, CLONE_NEWNS);
 		return -EINVAL;
+	}
 
-	if (!ops.owner || !droid_lkm_userns_is_text((unsigned long)ops.owner))
+	if (!ops.owner || !droid_lkm_userns_is_text((unsigned long)ops.owner)) {
+		droid_lkm_misc_warn("mntns_operations owner invalid: owner=0x%lx\n",
+				    (unsigned long)ops.owner);
 		return -EINVAL;
+	}
 
 	droid_lkm_userns_mnt_ops = (const struct proc_ns_operations *)addr;
 	droid_lkm_userns_mnt_owner = ops.owner;
@@ -113,8 +129,8 @@ static int droid_lkm_userns_mnt_ops_resolve(void)
  * a candidate must hold the answer the stub gave, and the write is kept only when the
  * kernel's own accessor reads it back
  */
-static int droid_lkm_userns_mnt_try(struct mnt_namespace *mnt_ns,
-				    unsigned int off, struct user_namespace *want)
+static __nocfi int droid_lkm_userns_mnt_try(struct mnt_namespace *mnt_ns,
+					    unsigned int off, struct user_namespace *want)
 {
 	void **field = (void **)((char *)mnt_ns + off);
 	void *old;
@@ -134,8 +150,16 @@ static int droid_lkm_userns_mnt_try(struct mnt_namespace *mnt_ns,
 	return -EINVAL;
 }
 
-static int droid_lkm_userns_mnt_own(struct mnt_namespace *mnt_ns,
-				    struct user_namespace *want)
+__nocfi struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns)
+{
+	if (!mnt_ns || !droid_lkm_userns_mnt_owner)
+		return NULL;
+
+	return droid_lkm_userns_mnt_owner((struct ns_common *)mnt_ns);
+}
+
+static __nocfi int droid_lkm_userns_mnt_own(struct mnt_namespace *mnt_ns,
+					    struct user_namespace *want)
 {
 	struct ns_common *ns = (struct ns_common *)mnt_ns;
 	unsigned int off;
@@ -219,6 +243,8 @@ droid_lkm_userns_fsctx_wrap(struct file_system_type *type, unsigned int sb_flags
 int droid_lkm_userns_owner_init(void)
 {
 	int ret;
+
+	droid_lkm_userns_kernel_base = (unsigned long)droid_lkm_misc_sym("_text");
 
 	droid_lkm_userns_init_uns = (struct user_namespace *)
 		droid_lkm_misc_sym("init_user_ns");

@@ -137,8 +137,49 @@ void droid_lkm_userns_map_selftest(void)
 		    droid_lkm_userns_map_up(&probe, id) != id)
 			bad++;
 	}
-	if (droid_lkm_userns_map_down(&probe, 4294967295U) != 4294967295U ||
-	    droid_lkm_userns_map_up(&probe, 4294967295U) != 4294967295U)
+	/* upper bound of the identity extent (4294967294U) must map cleanly */
+	if (!droid_lkm_userns_map_ok(&probe, 4294967294U))
+		bad++;
+	if (droid_lkm_userns_map_down(&probe, 4294967294U) != 4294967294U ||
+	    droid_lkm_userns_map_up(&probe, 4294967294U) != 4294967294U)
+		bad++;
+
+	/* 4294967295U ((u32)-1) is INVALID_UID and must remain unmapped */
+	if (droid_lkm_userns_map_ok(&probe, 4294967295U))
+		bad++;
+	if (droid_lkm_userns_map_down(&probe, 4294967295U) != DROID_LKM_UID_UNMAPPED ||
+	    droid_lkm_userns_map_up(&probe, 4294967295U) != DROID_LKM_UID_UNMAPPED)
+		bad++;
+
+	/* multi-extent map: container subuid layout (0->1000 count 1, 1->100000 count 65536) */
+	memset(&probe, 0, sizeof(probe));
+	probe.uns.uid_map.extent[0].first = 0;
+	probe.uns.uid_map.extent[0].lower_first = 1000;
+	probe.uns.uid_map.extent[0].count = 1;
+	probe.uns.uid_map.extent[1].first = 1;
+	probe.uns.uid_map.extent[1].lower_first = 100000;
+	probe.uns.uid_map.extent[1].count = 65536;
+	probe.uns.uid_map.nr_extents = 2;
+
+	/* root mapping */
+	if (droid_lkm_userns_map_down(&probe, 0) != 1000 ||
+	    droid_lkm_userns_map_up(&probe, 1000) != 0)
+		bad++;
+
+	/* first subuid */
+	if (droid_lkm_userns_map_down(&probe, 1) != 100000 ||
+	    droid_lkm_userns_map_up(&probe, 100000) != 1)
+		bad++;
+
+	/* last subuid */
+	if (droid_lkm_userns_map_down(&probe, 65536) != 165535 ||
+	    droid_lkm_userns_map_up(&probe, 165535) != 65536)
+		bad++;
+
+	/* out of range */
+	if (droid_lkm_userns_map_down(&probe, 65537) != DROID_LKM_UID_UNMAPPED ||
+	    droid_lkm_userns_map_up(&probe, 999) != DROID_LKM_UID_UNMAPPED ||
+	    droid_lkm_userns_map_up(&probe, 1001) != DROID_LKM_UID_UNMAPPED)
 		bad++;
 
 	if (bad)

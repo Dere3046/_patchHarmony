@@ -19,8 +19,9 @@ bool droid_lkm_misc_verbose;
 
 static unsigned long __nocfi droid_lkm_misc_hk_resolve(const char *name)
 {
-	return kallrecon_klp ? kallrecon_klp(name) : 0;
+	return droid_lkm_misc_sym(name);
 }
+
 
 static const struct hk_cfg droid_lkm_misc_hk_cfg = {
 	.resolve = droid_lkm_misc_hk_resolve,
@@ -102,7 +103,7 @@ static int __init droid_lkm_misc_init(void)
 	if (droid_lkm_misc_xt_enable) {
 		ret = droid_lkm_misc_xt_init();
 		if (ret)
-			return ret;
+			goto err_proc;
 	} else {
 		droid_lkm_misc_report("xt", "off", "xt=0");
 	}
@@ -126,6 +127,14 @@ static int __init droid_lkm_misc_init(void)
 	}
 
 	return 0;
+
+err_proc:
+	droid_lkm_misc_proc_exit();
+	if (droid_lkm_misc_hk_up) {
+		hk_exit();
+		droid_lkm_misc_hk_up = false;
+	}
+	return ret;
 }
 
 static void __exit droid_lkm_misc_exit(void)

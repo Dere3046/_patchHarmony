@@ -12,9 +12,23 @@
 #include <linux/ns_common.h>
 #include <linux/user_namespace.h>
 #include <linux/proc_ns.h>
+#include <linux/refcount.h>
+#include <linux/version.h>
 
 struct task_struct;
 struct cred;
+struct mnt_namespace;
+
+static inline refcount_t *droid_lkm_userns_ns_ref(struct ns_common *ns)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
+	return &ns->__ns_ref;
+#else
+	return &ns->count;
+#endif
+}
+
+struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns);
 
 /*
  * one fake user namespace. struct user_namespace comes first so the object can be handed to
