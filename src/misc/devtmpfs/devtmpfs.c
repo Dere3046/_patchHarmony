@@ -70,6 +70,15 @@
 #include "hk_inline.h"
 #include "devtmpfs.h"
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 1, 0)
+/*
+ * reconfigure_single() is static in 5.15 and only from 6.1 on is it declared in
+ * include/linux/fs_context.h. the prototype exists so typeof(&reconfigure_single)
+ * has the kernel's own type; the address itself is resolved by name, never linked.
+ */
+int reconfigure_single(struct super_block *s, int flags, void *data);
+#endif
+
 struct droid_lkm_devtmpfs_ksym {
 	typeof(&vfs_kern_mount)		vfs_kern_mount;
 	typeof(&register_filesystem)	register_filesystem;

@@ -15,8 +15,11 @@
  * there is no state to correct: the question itself names the host. Both keep
  * the original as the fast path and only add the container case. The owners the
  * kernel fills in through the get_user_ns() stub are corrected in
- * userns_owner.c, which is why may_mount() and mount_capable() have no hook:
- * may_mount() is inlined into path_mount() and could not be hooked anyway.
+ * userns_owner.c, which is why may_mount() has no hook: it is inlined into
+ * path_mount() and could not be hooked anyway. mount_capable() is a real function
+ * and is hooked here: for a filesystem that is not FS_USERNS_MOUNT it asks for
+ * CAP_SYS_ADMIN in the initial namespace, which a privileged container should be
+ * allowed to answer for itself.
  */
 
 #include <linux/sched.h>
@@ -25,6 +28,7 @@
 #include <linux/nsproxy.h>
 #include <linux/utsname.h>
 #include <linux/cgroup.h>
+#include <linux/ipc_namespace.h>
 #include <linux/time_namespace.h>
 #include <net/net_namespace.h>
 #include <linux/fs.h>
@@ -37,15 +41,23 @@
 #include <linux/uidgid.h>
 
 #include "misc.h"
+#include "misc_layout.h"
 #include "misc_ksym.h"
 #include "userns.h"
 #include "hk_inline.h"
 #include "ds_shapes.h"
 
+/* fs/internal.h is not a module header; this is the kernel's own declaration */
+bool mount_capable(struct fs_context *fc);
+
 static struct hk_inline droid_lkm_userns_unshare_hook;
 static struct hk_inline droid_lkm_userns_nsproxy_hook;
 static struct hk_inline droid_lkm_userns_creds_hook;
 static struct hk_inline droid_lkm_userns_inodecap_hook;
+static struct hk_inline droid_lkm_userns_mountcap_hook;
+static struct hk_inline droid_lkm_userns_prepcred_hook;
+static struct hk_inline droid_lkm_userns_putcred_hook;
+static struct hk_inline droid_lkm_userns_seccap_hook;
 
 static int (*droid_lkm_userns_unshare_orig)(unsigned long flags);
 static int (*droid_lkm_userns_nsproxy_orig)(unsigned long unshare_flags,
@@ -57,6 +69,132 @@ static int (*droid_lkm_userns_creds_orig)(struct task_struct *p,
 
 static bool (*droid_lkm_userns_inodecap_orig)(DROID_LKM_IDMAP_PARAM
 					      const struct inode *inode, int cap);
+static bool (*droid_lkm_userns_mountcap_orig)(struct fs_context *fc);
+
+static struct cred *(*droid_lkm_userns_prepcred_orig)(void);
+static void (*droid_lkm_userns_putcred_orig)(struct cred *cred);
+static int (*droid_lkm_userns_seccap_orig)(const struct cred *cred,
+					   struct user_namespace *ns,
+					   int cap, unsigned int opts);
+
+__nocfi noinline struct cred *droid_lkm_userns_prepcred_wrap(void)
+{
+	struct cred *new;
+	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_prepcred_orig) orig =
+		READ_ONCE(droid_lkm_userns_prepcred_orig);
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_prepcred_hook.orig;
+	if (!orig)
+		return NULL;
+
+	new = orig();
+	if (!new)
+		return NULL;
+
+	/*
+	 * In kernels with CONFIG_USER_NS disabled, prepare_creds() shallow-copies
+	 * old->user_ns via memcpy, but get_user_ns() is a stub returning &init_user_ns
+	 * without refcounting. Acquire a reference for our fake user namespace.
+	 */
+	u = droid_lkm_userns_from_ns(new->user_ns);
+	if (u)
+		droid_lkm_userns_get(u);
+
+	return new;
+}
+
+__nocfi noinline void droid_lkm_userns_putcred_wrap(struct cred *cred)
+{
+	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_putcred_orig) orig =
+		READ_ONCE(droid_lkm_userns_putcred_orig);
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_putcred_hook.orig;
+
+	if (cred) {
+		u = droid_lkm_userns_from_ns(cred->user_ns);
+		if (u)
+			droid_lkm_userns_put(u);
+	}
+
+	if (orig)
+		orig(cred);
+}
+
+__nocfi noinline int droid_lkm_userns_seccap_wrap(const struct cred *cred,
+						  struct user_namespace *ns,
+						  int cap, unsigned int opts)
+{
+	struct droid_lkm_userns *targ_u, *cred_u;
+	typeof(droid_lkm_userns_seccap_orig) orig =
+		READ_ONCE(droid_lkm_userns_seccap_orig);
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_seccap_hook.orig;
+	if (!orig)
+		return -EINVAL;
+
+	/* Fast path: host check on host credentials */
+	if (likely(ns == droid_lkm_userns_init_uns &&
+		   (!cred || cred->user_ns == droid_lkm_userns_init_uns)))
+		return orig(cred, ns, cap, opts);
+
+	/*
+	 * Security boundary 1: a fake user namespace NEVER holds capabilities
+	 * over the initial user namespace (host root). Strictly refuse with
+	 * -EPERM to prevent container escape and host privilege escalation.
+	 */
+	if (ns == droid_lkm_userns_init_uns)
+		return -EPERM;
+
+	targ_u = droid_lkm_userns_from_ns(ns);
+	if (!targ_u)
+		return orig(cred, ns, cap, opts);
+
+	if (!cred)
+		return -EPERM;
+
+	cred_u = droid_lkm_userns_from_ns(cred->user_ns);
+
+	/*
+	 * Mirrors cap_capable() from security/commoncap.c:
+	 * Examine target namespace and all of its ancestors.
+	 */
+	while (targ_u) {
+		/* Do we have the capability in the current namespace? */
+		if (cred_u == targ_u) {
+			if (cap_raised(cred->cap_effective, cap))
+				return 0;
+			return -EPERM;
+		}
+
+		/* If we're already at a lower level than we're looking for, stop */
+		if (targ_u->level <= (cred_u ? cred_u->level : 0))
+			return -EPERM;
+
+		/* The owner of the user namespace has all caps in it */
+		if (targ_u->uns.parent == (cred_u ? &cred_u->uns : droid_lkm_userns_init_uns)) {
+			if (uid_eq(cred->euid, targ_u->uns.owner))
+				return 0;
+			if (cred_u) {
+				if (cap_raised(cred->cap_effective, cap))
+					return 0;
+			} else {
+				if (orig(cred, droid_lkm_userns_init_uns, cap, opts) == 0)
+					return 0;
+			}
+			return -EPERM;
+		}
+
+		/* Walk up towards root */
+		targ_u = droid_lkm_userns_from_ns(targ_u->uns.parent);
+	}
+
+	return -EPERM;
+}
 
 /*
  * unshare_nsproxy_namespaces() picks current_user_ns(), the initial namespace here, and the
@@ -68,25 +206,33 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 						   struct cred *new_cred,
 						   struct fs_struct *new_fs)
 {
-	struct droid_lkm_userns *u = droid_lkm_userns_of(current);
+	const struct cred *cred = new_cred ? new_cred : current_cred();
+	struct droid_lkm_userns *u = cred ? droid_lkm_userns_from_ns(cred->user_ns) : NULL;
 	struct nsproxy *nsp;
-	int ret;
+	typeof(droid_lkm_userns_nsproxy_orig) orig =
+		READ_ONCE(droid_lkm_userns_nsproxy_orig);
 
-	if (!u || new_cred || !cap_raised(current_cred()->cap_effective, CAP_SYS_ADMIN))
-		return droid_lkm_userns_nsproxy_orig(unshare_flags, new_nsp, new_cred, new_fs);
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_nsproxy_hook.orig;
+	if (!orig)
+		return -EINVAL;
+
+	if (!u || !cap_raised(cred->cap_effective, CAP_SYS_ADMIN))
+		return orig(unshare_flags, new_nsp, new_cred, new_fs);
 
 	nsp = droid_lkm_misc_ks.create_new_namespaces(unshare_flags, current, &u->uns,
-						      new_fs ? new_fs : current->fs);
+						      new_fs ? new_fs : droid_lkm_misc_task_fs(current));
 	if (IS_ERR(nsp))
 		return PTR_ERR(nsp);
 
 	/*
-	 * get_user_ns() is a stub returning the initial namespace, so the constructors stored the
-	 * wrong owner. only namespaces this call created are touched, the mount namespace is covered
-	 * by may_mount()
+	 * get_user_ns() is a stub returning the initial namespace, so constructors stored
+	 * the wrong owner. Only namespaces created by this call are touched.
 	 */
 	if (unshare_flags & CLONE_NEWUTS)
 		nsp->uts_ns->user_ns = &u->uns;
+	if ((unshare_flags & CLONE_NEWIPC) && nsp->ipc_ns)
+		nsp->ipc_ns->user_ns = &u->uns;
 	if (unshare_flags & CLONE_NEWNET)
 		nsp->net_ns->user_ns = &u->uns;
 	if (unshare_flags & CLONE_NEWCGROUP)
@@ -95,9 +241,7 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 		nsp->time_ns_for_children->user_ns = &u->uns;
 
 	*new_nsp = nsp;
-	ret = 0;
-
-	return ret;
+	return 0;
 }
 
 __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
@@ -106,9 +250,16 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	const struct cred *old;
 	unsigned long rest;
 	int ret;
+	typeof(droid_lkm_userns_unshare_orig) orig =
+		READ_ONCE(droid_lkm_userns_unshare_orig);
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_unshare_hook.orig;
+	if (!orig)
+		return -EINVAL;
 
 	if (!(flags & CLONE_NEWUSER))
-		return droid_lkm_userns_unshare_orig(flags);
+		return orig(flags);
 
 	/* upstream rejects this pair before it touches anything */
 	if (flags & CLONE_FS)
@@ -116,27 +267,28 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 
 	/* allocate before the kernel changes anything, so failure is free */
 	u = droid_lkm_userns_create(droid_lkm_userns_of(current));
-	if (!u)
-		return -ENOMEM;
+	if (IS_ERR(u))
+		return PTR_ERR(u);
 
 	old = get_task_cred(current);
 
 	ret = droid_lkm_userns_install_current(u);
 	if (ret) {
 		put_cred(old);
-		droid_lkm_userns_destroy(u);
+		droid_lkm_userns_put(u);
 		return ret;
 	}
 
 	rest = flags & ~CLONE_NEWUSER;
-	ret = droid_lkm_userns_unshare_orig(rest);
+	ret = orig(rest);
 	if (ret) {
 		droid_lkm_misc_ks.commit_creds((struct cred *)old);
-		droid_lkm_userns_destroy(u);
+		droid_lkm_userns_put(u);
 		return ret;
 	}
 
 	put_cred(old);
+	droid_lkm_userns_put(u);
 
 	return 0;
 }
@@ -147,25 +299,41 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 	struct droid_lkm_userns *u;
 	unsigned long rest;
 	int ret;
+	typeof(droid_lkm_userns_creds_orig) orig =
+		READ_ONCE(droid_lkm_userns_creds_orig);
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_creds_hook.orig;
+	if (!orig)
+		return -EINVAL;
 
 	/* a thread clone shares credentials, so it cannot own a namespace */
 	if (!(clone_flags & CLONE_NEWUSER) || (clone_flags & CLONE_THREAD))
-		return droid_lkm_userns_creds_orig(p, clone_flags);
+		return orig(p, clone_flags);
 
 	u = droid_lkm_userns_create(droid_lkm_userns_of(current));
-	if (!u)
-		return -ENOMEM;
+	if (IS_ERR(u))
+		return PTR_ERR(u);
 
 	rest = clone_flags & ~CLONE_NEWUSER;
-	ret = droid_lkm_userns_creds_orig(p, rest);
+	ret = orig(p, rest);
 	if (ret) {
-		droid_lkm_userns_destroy(u);
+		droid_lkm_userns_put(u);
 		return ret;
 	}
 
 	/* the child has not run and copy_creds() built a fresh credential, write both cred pointers */
-	droid_lkm_userns_install_cred((struct cred *)p->real_cred, u);
-	droid_lkm_userns_install_cred((struct cred *)p->cred, u);
+	{
+		struct cred *p_real = (struct cred *)droid_lkm_misc_task_real_cred(p);
+		struct cred *p_cred = (struct cred *)droid_lkm_misc_task_cred(p);
+
+		if (p_real)
+			droid_lkm_userns_install_cred(p_real, u);
+		if (p_cred && p_cred != p_real)
+			droid_lkm_userns_install_cred(p_cred, u);
+	}
+
+	droid_lkm_userns_put(u);
 
 	return 0;
 }
@@ -176,12 +344,15 @@ __nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 {
 	struct droid_lkm_userns *u;
 
+	if (!droid_lkm_userns_inodecap_orig)
+		return false;
+
 	if (droid_lkm_userns_inodecap_orig(DROID_LKM_IDMAP_PASS inode, cap))
 		return true;
 
 	/* an idmapped mount is a different rule set, it arrives with the lens */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)
-	if (droid_lkm_misc_ks.nop_mnt_idmap &&
+	if (!droid_lkm_misc_ks.nop_mnt_idmap ||
 	    (const void *)idmap != (const void *)droid_lkm_misc_ks.nop_mnt_idmap)
 		return false;
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
@@ -197,8 +368,37 @@ __nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 		return false;
 
 	/* privileged_wrt_inode_uidgid(): both ids must be mapped in the namespace */
-	return droid_lkm_userns_map_ok(u, __kuid_val(inode->i_uid)) &&
-	       droid_lkm_userns_map_ok(u, __kgid_val(inode->i_gid));
+	return droid_lkm_userns_has_mapping(u, __kuid_val(inode->i_uid), true) &&
+	       droid_lkm_userns_has_mapping(u, __kgid_val(inode->i_gid), false);
+}
+
+/*
+ * mount_capable() asks for CAP_SYS_ADMIN in the initial namespace when the filesystem
+ * is not FS_USERNS_MOUNT, because capable() is compiled against current_user_ns(). a
+ * namespace created by host root is allowed to mount those (devtmpfs above all); a
+ * confined one is not, it only gets what a user namespace may mount
+ */
+__nocfi noinline bool droid_lkm_userns_mountcap_wrap(struct fs_context *fc)
+{
+	struct droid_lkm_userns *u;
+
+	if (!droid_lkm_userns_mountcap_orig)
+		return false;
+
+	if (droid_lkm_userns_mountcap_orig(fc))
+		return true;
+
+	if (!fc || !fc->fs_type || (fc->fs_type->fs_flags & FS_USERNS_MOUNT))
+		return false;
+
+	if (!cap_raised(current_cred()->cap_effective, CAP_SYS_ADMIN))
+		return false;
+
+	u = droid_lkm_userns_from_ns(fc->user_ns);
+	if (!u || !u->privileged)
+		return false;
+
+	return true;
 }
 
 static int droid_lkm_userns_hook_one(struct hk_inline *h, const char *sym,
@@ -212,7 +412,7 @@ static int droid_lkm_userns_hook_one(struct hk_inline *h, const char *sym,
 		return ret;
 	}
 
-	*orig = (void *)h->orig;
+	WRITE_ONCE(*orig, (void *)h->orig);
 	droid_lkm_misc_dbg("hook %-28s addr=0x%lx orig=0x%lx\n", sym, h->addr, h->orig);
 
 	return 0;
@@ -244,9 +444,41 @@ int droid_lkm_userns_hooks_init(void)
 	if (ret)
 		goto out_creds;
 
+	ret = droid_lkm_userns_hook_one(&droid_lkm_userns_mountcap_hook, "mount_capable",
+		"droid_lkm_userns_mountcap_wrap",
+		(void **)&droid_lkm_userns_mountcap_orig);
+	if (ret)
+		goto out_inodecap;
+
+	ret = droid_lkm_userns_hook_one(&droid_lkm_userns_seccap_hook, "security_capable",
+		"droid_lkm_userns_seccap_wrap",
+		(void **)&droid_lkm_userns_seccap_orig);
+	if (ret)
+		goto out_mountcap;
+
+	ret = droid_lkm_userns_hook_one(&droid_lkm_userns_prepcred_hook, "prepare_creds",
+		"droid_lkm_userns_prepcred_wrap",
+		(void **)&droid_lkm_userns_prepcred_orig);
+	if (ret)
+		goto out_seccap;
+
+	ret = droid_lkm_userns_hook_one(&droid_lkm_userns_putcred_hook, "__put_cred",
+		"droid_lkm_userns_putcred_wrap",
+		(void **)&droid_lkm_userns_putcred_orig);
+	if (ret)
+		goto out_prepcred;
+
 	droid_lkm_misc_info("userns hooks installed\n");
 	return 0;
 
+out_prepcred:
+	hk_inline_unhook(&droid_lkm_userns_prepcred_hook);
+out_seccap:
+	hk_inline_unhook(&droid_lkm_userns_seccap_hook);
+out_mountcap:
+	hk_inline_unhook(&droid_lkm_userns_mountcap_hook);
+out_inodecap:
+	hk_inline_unhook(&droid_lkm_userns_inodecap_hook);
 out_creds:
 	hk_inline_unhook(&droid_lkm_userns_creds_hook);
 out_nsproxy:
@@ -258,6 +490,10 @@ out_unshare:
 
 void droid_lkm_userns_hooks_exit(void)
 {
+	hk_inline_unhook(&droid_lkm_userns_putcred_hook);
+	hk_inline_unhook(&droid_lkm_userns_prepcred_hook);
+	hk_inline_unhook(&droid_lkm_userns_seccap_hook);
+	hk_inline_unhook(&droid_lkm_userns_mountcap_hook);
 	hk_inline_unhook(&droid_lkm_userns_inodecap_hook);
 	hk_inline_unhook(&droid_lkm_userns_creds_hook);
 	hk_inline_unhook(&droid_lkm_userns_nsproxy_hook);

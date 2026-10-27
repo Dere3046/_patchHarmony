@@ -36,6 +36,7 @@
 #include <linux/mnt_namespace.h>
 
 #include "misc.h"
+#include "misc_layout.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "userns.h"
@@ -43,6 +44,7 @@
 static typeof(&ksys_unshare) droid_lkm_userns_selftest_unshare;
 
 static unsigned int droid_lkm_userns_selftest_failed;
+static char droid_lkm_userns_selftest_last_failed[64];
 static struct completion droid_lkm_userns_selftest_done;
 
 static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
@@ -51,6 +53,9 @@ static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
 		return;
 
 	droid_lkm_userns_selftest_failed++;
+	scnprintf(droid_lkm_userns_selftest_last_failed,
+		  sizeof(droid_lkm_userns_selftest_last_failed),
+		  "%s: %d", what, ret);
 	droid_lkm_misc_err("selftest: %s failed: %d\n", what, ret);
 }
 
@@ -75,15 +80,19 @@ static int droid_lkm_userns_selftest_thread(void *unused)
 
 	ret = droid_lkm_userns_selftest_unshare(CLONE_NEWUTS);
 	droid_lkm_userns_selftest_step("unshare(CLONE_NEWUTS)", ret == 0, ret);
-	if (!ret)
+	if (!ret) {
+		struct nsproxy *nsp = droid_lkm_misc_task_nsproxy(current);
 		droid_lkm_userns_selftest_step("the uts namespace is owned by it",
-			current->nsproxy->uts_ns->user_ns == &u->uns, 0);
+			nsp && nsp->uts_ns && nsp->uts_ns->user_ns == &u->uns, 0);
+	}
 
 	ret = droid_lkm_userns_selftest_unshare(CLONE_NEWNS);
 	droid_lkm_userns_selftest_step("unshare(CLONE_NEWNS)", ret == 0, ret);
-	if (!ret)
+	if (!ret) {
+		struct nsproxy *nsp = droid_lkm_misc_task_nsproxy(current);
 		droid_lkm_userns_selftest_step("the mount namespace is owned by it",
-			droid_lkm_userns_mntns_owner(current->nsproxy->mnt_ns) == &u->uns, 0);
+			nsp && nsp->mnt_ns && droid_lkm_userns_mntns_owner(nsp->mnt_ns) == &u->uns, 0);
+	}
 
 out:
 	complete(&droid_lkm_userns_selftest_done);
@@ -150,8 +159,10 @@ void droid_lkm_userns_selftest_run(void)
 	droid_lkm_userns_selftest_e2e();
 
 	if (droid_lkm_userns_selftest_failed) {
-		scnprintf(detail, sizeof(detail), "%u checks failed",
-			  droid_lkm_userns_selftest_failed);
+		scnprintf(detail, sizeof(detail), "%u checks failed (%s)",
+			  droid_lkm_userns_selftest_failed,
+			  droid_lkm_userns_selftest_last_failed[0] ?
+			  droid_lkm_userns_selftest_last_failed : "coverage");
 		droid_lkm_misc_report("userns selftest", "failed", detail);
 		droid_lkm_misc_err("userns selftest failed: %s\n", detail);
 		return;

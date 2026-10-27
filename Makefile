@@ -18,13 +18,14 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
 #   oppo ddl history table
-# the vendor module supports 6.6 and 6.12 only; the main module is the one
-# being ported to the other branches
+# the vendor module supports 6.6 and 6.12 only, and needs the idmap sentinel
+# the driver core compares against; the main module is the one being ported to
+# the other branches
 VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
 	$(KDIR)/include/generated/utsrelease.h 2>/dev/null)
-DLKM_OPT := $(strip $(if $(filter 6.6 6.12,$(VENDOR_VER)),\
+VENDOR_OPT := $(strip $(if $(filter 6.6 6.12,$(VENDOR_VER)),\
 	$(shell grep -q ' nop_mnt_idmap$$' $(KDIR)/System.map 2>/dev/null && echo m),))
-obj-$(DLKM_OPT) += droid_lkm_vendor.o
+obj-$(VENDOR_OPT) += droid_lkm_vendor.o
 DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 	src/compat/vendor/ddl_hit.o src/compat/vendor/vendor_syms.o \
 	src/compat/ds_compat.o src/compat/ds_layout_anchor.o \
@@ -32,10 +33,14 @@ DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 droid_lkm_vendor-y := $(DLC_VENDOR_OBJS) $(DEPS_OBJS_ALL)
 
 # third ko in the same Kbuild: container scoped kernel features missing on stock GKI
-# (devtmpfs, fake userns, xt_addrtype)
-obj-$(DLKM_OPT) += droid_lkm_misc.o
+# (devtmpfs, fake userns, xt_addrtype). it starts at 5.15: 5.10 predates the
+# ns_common refcount and the owner plumbing the user namespace work is built on,
+# so that branch stays off until it is ported
+MISC_OPT := $(strip $(if $(filter 5.15 6.1 6.6 6.12,$(VENDOR_VER)),m,))
+obj-$(MISC_OPT) += droid_lkm_misc.o
 DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_ksym.o \
+	src/misc/misc_layout.o \
 	src/misc/misc_scope.o \
 	src/misc/misc_proc.o \
 	src/misc/xt/xt_reg.o \

@@ -21,19 +21,30 @@
 static struct ns_common *droid_lkm_userns_host_placeholder;
 static struct proc_ns_operations *droid_lkm_userns_host_ops;
 
-static struct ns_common *droid_lkm_userns_get(struct task_struct *task)
+static struct ns_common *droid_lkm_userns_nsops_get(struct task_struct *task)
 {
 	struct droid_lkm_userns *u = droid_lkm_userns_of(task);
 
-	if (u)
+	if (u) {
+		droid_lkm_userns_get(u);
 		return &u->uns.ns;
+	}
 
 	return droid_lkm_userns_host_placeholder;
 }
 
-static void droid_lkm_userns_put(struct ns_common *ns)
+static void droid_lkm_userns_nsops_put(struct ns_common *ns)
 {
-	/* a fake namespace is owned by the module and lives until unload */
+	struct user_namespace *uns;
+	struct droid_lkm_userns *u;
+
+	if (!ns || ns == droid_lkm_userns_host_placeholder)
+		return;
+
+	uns = container_of(ns, struct user_namespace, ns);
+	u = droid_lkm_userns_from_ns(uns);
+	if (u)
+		droid_lkm_userns_put(u);
 }
 
 static int droid_lkm_userns_install(struct nsset *nsset, struct ns_common *ns)
@@ -51,7 +62,7 @@ static struct ns_common *droid_lkm_userns_get_parent(struct ns_common *ns)
 {
 	struct user_namespace *uns = container_of(ns, struct user_namespace, ns);
 
-	if (uns->parent)
+	if (uns->parent && uns->parent != droid_lkm_userns_init_uns)
 		return &uns->parent->ns;
 
 	return ERR_PTR(-EPERM);
@@ -60,8 +71,8 @@ static struct ns_common *droid_lkm_userns_get_parent(struct ns_common *ns)
 static const struct proc_ns_operations droid_lkm_userns_ops_real = {
 	.name = "user",
 	.type = CLONE_NEWUSER,
-	.get = droid_lkm_userns_get,
-	.put = droid_lkm_userns_put,
+	.get = droid_lkm_userns_nsops_get,
+	.put = droid_lkm_userns_nsops_put,
 	.install = droid_lkm_userns_install,
 	.owner = droid_lkm_userns_owner,
 	.get_parent = droid_lkm_userns_get_parent,
@@ -135,7 +146,7 @@ int droid_lkm_userns_nsops_init(void)
 
 	ns->inum = PROC_USER_INIT_INO;
 	ns->ops = droid_lkm_userns_host_ops;
-	refcount_set(&ns->count, 1);
+	refcount_set(droid_lkm_userns_ns_ref(ns), 1);
 	droid_lkm_userns_host_placeholder = ns;
 
 	if (!droid_lkm_misc_ks.ns_kind_register) {

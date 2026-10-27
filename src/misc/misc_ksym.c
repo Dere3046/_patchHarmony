@@ -54,7 +54,7 @@ int droid_lkm_misc_ksym_init(void)
 		typeof(droid_lkm_misc_ks.prepare_creds));
 	DROID_LKM_MISC_THUNK(commit_creds, "commit_creds",
 		typeof(droid_lkm_misc_ks.commit_creds));
-	DROID_LKM_MISC_THUNK(key_put, "key_put", typeof(droid_lkm_misc_ks.key_put));
+	DROID_LKM_MISC_THUNK_OPT(key_put, "key_put", typeof(droid_lkm_misc_ks.key_put));
 	DROID_LKM_MISC_THUNK(create_new_namespaces, "create_new_namespaces",
 		typeof(droid_lkm_misc_ks.create_new_namespaces));
 
@@ -84,6 +84,8 @@ int droid_lkm_misc_ksym_init(void)
 	/* capability trace only, a kernel without it loses the trace and nothing else */
 	droid_lkm_misc_ks.cap_capable = (typeof(droid_lkm_misc_ks.cap_capable))
 		droid_lkm_misc_resolve("cap_capable");
+	droid_lkm_misc_ks.security_capable = (typeof(droid_lkm_misc_ks.security_capable))
+		droid_lkm_misc_resolve("security_capable");
 
 	if (droid_lkm_misc_thunk_missing)
 		return -ENOENT;

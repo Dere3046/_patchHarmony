@@ -15,6 +15,8 @@
 #include <linux/refcount.h>
 #include <linux/version.h>
 
+#include <linux/workqueue.h>
+
 struct task_struct;
 struct cred;
 struct mnt_namespace;
@@ -32,14 +34,21 @@ struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns
 
 /*
  * one fake user namespace. struct user_namespace comes first so the object can be handed to
- * the kernel and found again from a struct user_namespace pointer. the map starts empty like a
- * fresh namespace and becomes the identity map when written, an empty map reports 65534
+ * the kernel and found again from a struct user_namespace pointer. the map starts with the
+ * namespace's default (identity for a privileged creator, a single 0 -> creator extent for
+ * everyone else) and a proc write may replace it once, subject to the creator's anchor
  */
 struct droid_lkm_userns {
 	struct user_namespace uns;
 	struct list_head link;
+	refcount_t count;
+	struct work_struct work;
 	unsigned int level;
-	bool map_written;
+	/* the creator held CAP_SETUID and CAP_SETGID over the initial namespace */
+	bool privileged;
+	/* a map was written through the proc file; the default map is not a write */
+	bool uid_written;
+	bool gid_written;
 };
 
 int droid_lkm_userns_init(void);
@@ -67,7 +76,10 @@ void droid_lkm_userns_selftest_run(void);
 
 struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent);
 void droid_lkm_userns_destroy(struct droid_lkm_userns *u);
+struct droid_lkm_userns *droid_lkm_userns_get(struct droid_lkm_userns *u);
+void droid_lkm_userns_put(struct droid_lkm_userns *u);
 struct droid_lkm_userns *droid_lkm_userns_of(struct task_struct *task);
+struct droid_lkm_userns *droid_lkm_userns_from_ns(struct user_namespace *uns);
 unsigned int droid_lkm_userns_live(void);
 bool droid_lkm_userns_is_ours(const struct user_namespace *uns);
 
@@ -79,10 +91,18 @@ const struct proc_ns_operations *droid_lkm_userns_ops_for(struct task_struct *ta
 int droid_lkm_userns_nsops_init(void);
 void droid_lkm_userns_nsops_exit(void);
 
-u32 droid_lkm_userns_map_down(const struct droid_lkm_userns *u, u32 id);
-u32 droid_lkm_userns_map_up(const struct droid_lkm_userns *u, u32 id);
-bool droid_lkm_userns_map_ok(const struct droid_lkm_userns *u, u32 id);
+/* an id no namespace maps, the same value map_id_up() returns */
+#define DROID_LKM_USERNS_ID_UNMAPPED ((u32)-1)
+
+u32 droid_lkm_userns_map_down(const struct droid_lkm_userns *u, u32 id, bool is_uid);
+u32 droid_lkm_userns_map_up(const struct droid_lkm_userns *u, u32 id, bool is_uid);
+u32 droid_lkm_userns_map_parent_down(const struct droid_lkm_userns *u, u32 id,
+				     u32 count, bool is_uid);
+bool droid_lkm_userns_map_ok(const struct droid_lkm_userns *u, u32 id, bool is_uid);
+bool droid_lkm_userns_has_mapping(const struct droid_lkm_userns *u, u32 id,
+				  bool is_uid);
 void droid_lkm_userns_map_identity(struct droid_lkm_userns *u);
+bool droid_lkm_userns_map_confine(struct droid_lkm_userns *u);
 void droid_lkm_userns_map_selftest(void);
 
 #endif

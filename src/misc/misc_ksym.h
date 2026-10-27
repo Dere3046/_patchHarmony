@@ -67,6 +67,8 @@ struct droid_lkm_misc_ksym {
 	/* the single capability decision function, resolved for the trace only */
 	int (*cap_capable)(const struct cred *cred, struct user_namespace *targ_ns,
 			   int cap, unsigned int opts);
+	int (*security_capable)(const struct cred *cred, struct user_namespace *ns,
+				int cap, unsigned int opts);
 
 	/* address of the kernel's "no idmap" sentinel, compared by pointer */
 	const struct mnt_idmap *nop_mnt_idmap;

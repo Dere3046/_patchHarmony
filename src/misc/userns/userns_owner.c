@@ -44,13 +44,11 @@
 #include <linux/user_namespace.h>
 
 #include "misc.h"
+#include "misc_layout.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "userns.h"
 #include "hk_inline.h"
-
-/* last offset of struct mnt_namespace that can still hold its owner */
-#define DROID_LKM_USERNS_MNT_SCAN 128
 /* how far above the text base a resolved callback is allowed to sit */
 #define DROID_LKM_USERNS_TEXT_WIN (64UL << 20)
 
@@ -60,14 +58,15 @@ struct user_namespace *droid_lkm_userns_init_uns;
 
 static struct hk_inline droid_lkm_userns_copymntns_hook;
 static struct hk_inline droid_lkm_userns_fsctx_hook;
+static struct hk_inline droid_lkm_userns_putmntns_hook;
 static struct mnt_namespace *(*droid_lkm_userns_copymntns_orig)(
 		unsigned long flags, struct mnt_namespace *ns,
 		struct user_namespace *user_ns, struct fs_struct *new_fs);
 static struct fs_context *(*droid_lkm_userns_fsctx_orig)(
 		struct file_system_type *type, unsigned int sb_flags);
+static void (*droid_lkm_userns_putmntns_orig)(struct mnt_namespace *ns);
 static const struct proc_ns_operations *droid_lkm_userns_mnt_ops;
 static droid_lkm_userns_owner_t droid_lkm_userns_mnt_owner;
-static unsigned int droid_lkm_userns_mnt_off;
 
 static unsigned long droid_lkm_userns_kernel_base;
 
@@ -125,31 +124,6 @@ static int droid_lkm_userns_mnt_ops_resolve(void)
 	return 0;
 }
 
-/*
- * a candidate must hold the answer the stub gave, and the write is kept only when the
- * kernel's own accessor reads it back
- */
-static __nocfi int droid_lkm_userns_mnt_try(struct mnt_namespace *mnt_ns,
-					    unsigned int off, struct user_namespace *want)
-{
-	void **field = (void **)((char *)mnt_ns + off);
-	void *old;
-
-	if (safe_read(&old, field, sizeof(old)))
-		return -EFAULT;
-
-	if (old != droid_lkm_userns_init_uns)
-		return -ENOENT;
-
-	WRITE_ONCE(*field, want);
-	if (droid_lkm_userns_mnt_owner((struct ns_common *)mnt_ns) == want)
-		return 0;
-
-	WRITE_ONCE(*field, old);
-
-	return -EINVAL;
-}
-
 __nocfi struct user_namespace *droid_lkm_userns_mntns_owner(struct mnt_namespace *mnt_ns)
 {
 	if (!mnt_ns || !droid_lkm_userns_mnt_owner)
@@ -162,33 +136,67 @@ static __nocfi int droid_lkm_userns_mnt_own(struct mnt_namespace *mnt_ns,
 					    struct user_namespace *want)
 {
 	struct ns_common *ns = (struct ns_common *)mnt_ns;
-	unsigned int off;
+	struct droid_lkm_userns *u = droid_lkm_userns_from_ns(want);
+	struct user_namespace *old;
+	void **field;
+	u32 off = droid_lkm_misc_mntns_user_ns_off;
 
-	if (ns->ops != droid_lkm_userns_mnt_ops)
+	if (ns->ops != droid_lkm_userns_mnt_ops || !u)
 		return -EINVAL;
 
-	if (droid_lkm_userns_mnt_owner(ns) == want)
-		return 0;
+	if (droid_lkm_userns_mnt_owner(ns) != want) {
+		if (!off) {
+			droid_lkm_misc_report("userns mount owner", "unsupported",
+					      "field not found in BTF");
+			return -ENOTSUPP;
+		}
 
-	if (droid_lkm_userns_mnt_off)
-		return droid_lkm_userns_mnt_try(mnt_ns, droid_lkm_userns_mnt_off, want);
+		old = droid_lkm_userns_mnt_owner(ns);
+		field = (void **)((char *)mnt_ns + off);
+		WRITE_ONCE(*field, want);
 
-	for (off = sizeof(*ns); off <= DROID_LKM_USERNS_MNT_SCAN; off += sizeof(void *)) {
-		if (droid_lkm_userns_mnt_try(mnt_ns, off, want))
-			continue;
+		if (droid_lkm_userns_mnt_owner(ns) != want) {
+			droid_lkm_misc_warn("mntns owner mismatch at Type_info offset %u\n", off);
+			/* nothing holds a reference to it, so leave the field as it was */
+			WRITE_ONCE(*field, old);
+			return -EINVAL;
+		}
 
-		droid_lkm_userns_mnt_off = off;
-		droid_lkm_misc_dbg("mnt ns owner at offset %u\n", off);
 		droid_lkm_misc_report("userns mount owner", "ready",
-				      "field found and verified");
-
-		return 0;
+				      "field verified via Type_info");
 	}
 
-	droid_lkm_misc_report("userns mount owner", "unsupported",
-			      "field not found, mounts in the namespace will fail");
+	/*
+	 * the mount namespace names this one as its owner from now on, and the kernel cannot
+	 * hold that reference for us: get_user_ns()/put_user_ns() are stubs here, so a mount
+	 * namespace that outlives the last credential (an open /proc/<pid>/ns/mnt, a bind
+	 * mount of one) would be left pointing at freed memory the next time may_mount()
+	 * asked its owner for a capability. hold it until put_mnt_ns()
+	 */
+	droid_lkm_userns_get(u);
 
-	return -ENOTSUPP;
+	return 0;
+}
+
+/* the other half of that reference */
+__nocfi noinline void droid_lkm_userns_putmntns_wrap(struct mnt_namespace *ns)
+{
+	typeof(droid_lkm_userns_putmntns_orig) orig =
+		READ_ONCE(droid_lkm_userns_putmntns_orig);
+	struct droid_lkm_userns *u;
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_putmntns_hook.orig;
+	if (!orig)
+		return;
+
+	if (ns) {
+		u = droid_lkm_userns_from_ns(droid_lkm_userns_mntns_owner(ns));
+		if (u)
+			droid_lkm_userns_put(u);
+	}
+
+	orig(ns);
 }
 
 __nocfi noinline struct mnt_namespace *
@@ -197,20 +205,28 @@ droid_lkm_userns_copymntns_wrap(unsigned long flags, struct mnt_namespace *ns,
 				struct fs_struct *new_fs)
 {
 	struct mnt_namespace *new_ns;
+	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_copymntns_orig) orig =
+		READ_ONCE(droid_lkm_userns_copymntns_orig);
 
-	if (!droid_lkm_userns_copymntns_orig)
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_copymntns_hook.orig;
+	if (!orig)
 		return ERR_PTR(-EAGAIN);
 
-	new_ns = droid_lkm_userns_copymntns_orig(flags, ns, user_ns, new_fs);
+	new_ns = orig(flags, ns, user_ns, new_fs);
 
 	if (IS_ERR(new_ns) || !(flags & CLONE_NEWNS))
 		return new_ns;
 
 	/* user_ns is the owner the kernel was handed, ours only for our own */
-	if (!droid_lkm_userns_is_ours(user_ns))
+	u = droid_lkm_userns_from_ns(user_ns);
+	if (!u)
+		u = droid_lkm_userns_of(current);
+	if (!u)
 		return new_ns;
 
-	if (droid_lkm_userns_mnt_own(new_ns, user_ns))
+	if (droid_lkm_userns_mnt_own(new_ns, &u->uns))
 		droid_lkm_misc_err("mount namespace kept the host as owner, mounts in it will fail\n");
 
 	return new_ns;
@@ -221,11 +237,15 @@ droid_lkm_userns_fsctx_wrap(struct file_system_type *type, unsigned int sb_flags
 {
 	struct fs_context *fc;
 	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_fsctx_orig) orig =
+		READ_ONCE(droid_lkm_userns_fsctx_orig);
 
-	if (!droid_lkm_userns_fsctx_orig)
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_fsctx_hook.orig;
+	if (!orig)
 		return ERR_PTR(-EAGAIN);
 
-	fc = droid_lkm_userns_fsctx_orig(type, sb_flags);
+	fc = orig(type, sb_flags);
 
 	/*
 	 * alloc_fs_context() took the owner from current_user_ns() and get_user_ns() took no
@@ -265,19 +285,36 @@ int droid_lkm_userns_owner_init(void)
 		droid_lkm_misc_warn("hook copy_mnt_ns failed: %d\n", ret);
 		return ret;
 	}
-	droid_lkm_userns_copymntns_orig = (void *)droid_lkm_userns_copymntns_hook.orig;
+	WRITE_ONCE(droid_lkm_userns_copymntns_orig, (void *)droid_lkm_userns_copymntns_hook.orig);
 
 	ret = hk_inline_hook(&droid_lkm_userns_fsctx_hook, "fs_context_for_mount",
 			     "droid_lkm_userns_fsctx_wrap");
 	if (ret) {
 		droid_lkm_misc_warn("hook fs_context_for_mount failed: %d\n", ret);
 		hk_inline_unhook(&droid_lkm_userns_copymntns_hook);
-		droid_lkm_userns_copymntns_orig = NULL;
+		WRITE_ONCE(droid_lkm_userns_copymntns_orig, NULL);
 		return ret;
 	}
-	droid_lkm_userns_fsctx_orig = (void *)droid_lkm_userns_fsctx_hook.orig;
+	WRITE_ONCE(droid_lkm_userns_fsctx_orig, (void *)droid_lkm_userns_fsctx_hook.orig);
 
-	droid_lkm_misc_dbg("owner: mntns_ops=0x%lx owner=0x%lx, both hooks up\n",
+	/*
+	 * required, not an addition: mnt_own() hands the mount namespace a reference that only
+	 * this hook can drop again. running without it would turn every namespace we hand out
+	 * into a dangling owner once the last credential goes
+	 */
+	ret = hk_inline_hook(&droid_lkm_userns_putmntns_hook, "put_mnt_ns",
+			     "droid_lkm_userns_putmntns_wrap");
+	if (ret) {
+		droid_lkm_misc_warn("hook put_mnt_ns failed: %d\n", ret);
+		hk_inline_unhook(&droid_lkm_userns_fsctx_hook);
+		WRITE_ONCE(droid_lkm_userns_fsctx_orig, NULL);
+		hk_inline_unhook(&droid_lkm_userns_copymntns_hook);
+		WRITE_ONCE(droid_lkm_userns_copymntns_orig, NULL);
+		return ret;
+	}
+	WRITE_ONCE(droid_lkm_userns_putmntns_orig, (void *)droid_lkm_userns_putmntns_hook.orig);
+
+	droid_lkm_misc_dbg("owner: mntns_ops=0x%lx owner=0x%lx, three hooks up\n",
 		(unsigned long)droid_lkm_userns_mnt_ops,
 		(unsigned long)droid_lkm_userns_mnt_owner);
 
@@ -286,6 +323,10 @@ int droid_lkm_userns_owner_init(void)
 
 void droid_lkm_userns_owner_exit(void)
 {
+	if (droid_lkm_userns_putmntns_orig) {
+		hk_inline_unhook(&droid_lkm_userns_putmntns_hook);
+		droid_lkm_userns_putmntns_orig = NULL;
+	}
 	if (droid_lkm_userns_fsctx_orig) {
 		hk_inline_unhook(&droid_lkm_userns_fsctx_hook);
 		droid_lkm_userns_fsctx_orig = NULL;

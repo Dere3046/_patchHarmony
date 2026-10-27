@@ -9,6 +9,7 @@
 #include "core.h"
 #include "hk.h"
 #include "misc.h"
+#include "misc_layout.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "xt_reg.h"
@@ -95,6 +96,8 @@ static int __init droid_lkm_misc_init(void)
 		return ret;
 	}
 	droid_lkm_misc_hk_up = true;
+
+	droid_lkm_misc_layout_init();
 
 	ret = droid_lkm_misc_proc_init();
 	if (ret)
