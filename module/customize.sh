@@ -136,6 +136,9 @@ cp "$MODPATH/kernels/$BEST/droid_lkm.ko" "$MODPATH/ko/" || abort "! cannot copy 
 if [ -f "$MODPATH/kernels/$BEST/droid_lkm_vendor.ko" ]; then
 	cp "$MODPATH/kernels/$BEST/droid_lkm_vendor.ko" "$MODPATH/ko/"
 fi
+if [ -f "$MODPATH/kernels/$BEST/droid_lkm_misc.ko" ]; then
+	cp "$MODPATH/kernels/$BEST/droid_lkm_misc.ko" "$MODPATH/ko/"
+fi
 rm -rf "$MODPATH/kernels"
 
 # 不带旧版本的状态
