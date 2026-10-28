@@ -13,8 +13,8 @@
 #include <linux/string.h>
 #include <linux/preempt.h>
 #include <linux/threads.h>
-
-#include <linux/threads.h>
+#include <linux/compiler.h>
+#include <linux/mm.h>
 
 #include "core.h"
 #include "ds_compat.h"
@@ -44,6 +44,41 @@ static struct task_struct dlc_ghost_task;
 static bool dlc_ghost_ready;
 static unsigned int dlc_ghost_hits;
 
+/* Fast caller cache for hot-path interrupt context (e.g. oplus_bsp_midas) */
+#define DLC_GHOST_CACHE_SZ 32
+static unsigned long dlc_ghost_cached_pages[DLC_GHOST_CACHE_SZ];
+static unsigned int dlc_ghost_cache_idx;
+
+static bool dlc_ghost_cache_hit(unsigned long ip)
+{
+	unsigned long page = ip & PAGE_MASK;
+	int i;
+
+	if (unlikely(!page))
+		return false;
+
+	for (i = 0; i < DLC_GHOST_CACHE_SZ; i++) {
+		if (READ_ONCE(dlc_ghost_cached_pages[i]) == page)
+			return true;
+	}
+	return false;
+}
+
+static void dlc_ghost_cache_add(unsigned long ip)
+{
+	unsigned long page = ip & PAGE_MASK;
+	unsigned int idx;
+
+	if (unlikely(!page))
+		return;
+
+	if (dlc_ghost_cache_hit(ip))
+		return;
+
+	idx = dlc_ghost_cache_idx++ % DLC_GHOST_CACHE_SZ;
+	WRITE_ONCE(dlc_ghost_cached_pages[idx], page);
+}
+
 static bool dlc_ghost_match_module(const char *name)
 {
 	size_t n;
@@ -60,33 +95,45 @@ static bool dlc_ghost_match_module(const char *name)
 __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 {
 	unsigned long ret_ip = (unsigned long)_RET_IP_;
-	struct task_struct *task;
+	typeof(&find_task_by_vpid) orig;
+	struct task_struct *task = NULL;
 	struct module *mod;
 	bool match = false;
 
-	if (unlikely(!dlc_ftbv_orig))
-		return NULL;
+	orig = READ_ONCE(dlc_ftbv_orig);
+	if (likely(orig))
+		task = orig(vnr);
 
-	task = dlc_ftbv_orig(vnr);
+	/* Always clean up hook guard state, even in the race-window where orig is NULL */
 	ds_hook_leave(&dlc_ftbv_hook);
+
 	if (likely(task))
 		return task;
 
-	if (!dlc_ghost_ready)
+	/* If ghost fixups are disabled or task_struct template is not ready */
+	if (!READ_ONCE(dlc_ghost_ready))
 		return task;
+	smp_rmb();
 
-	if (dlc_module_address) {
+	/* Fast path: check page cache without scanning kernel module tree */
+	if (dlc_ghost_cache_hit(ret_ip)) {
+		match = true;
+	} else if (dlc_module_address) {
 		preempt_disable();
 		mod = dlc_module_address(ret_ip);
 		if (mod)
 			match = dlc_ghost_match_module(mod->name);
 		preempt_enable();
-		if (!match)
-			return task;
+		if (match)
+			dlc_ghost_cache_add(ret_ip);
+	}
+
+	if (match) {
 		dlc_ghost_hits++;
 		if (dlc_ghost_hits <= DLC_GHOST_LOG_MAX)
-			pr_info("[droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s\n",
-				(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM);
+			pr_info("[droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s (orig=%s)\n",
+				(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM,
+				orig ? "miss" : "race-guard");
 		return &dlc_ghost_task;
 	}
 
@@ -182,7 +229,8 @@ static int dlc_ghost_build(void)
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_PID) = 0;
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_TGID) = 0;
 	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), 1000);
-	dlc_ghost_ready = true;
+	smp_wmb();
+	WRITE_ONCE(dlc_ghost_ready, true);
 	return 0;
 }
 
@@ -269,6 +317,35 @@ static void dlc_ghost_audit_pid_max(void)
 		value, cap);
 }
 
+static void dlc_ghost_prewarm_addr(unsigned long addr)
+{
+	int i;
+
+	if (!addr)
+		return;
+	for (i = -2; i <= 2; i++)
+		dlc_ghost_cache_add(addr + i * PAGE_SIZE);
+}
+
+static void dlc_ghost_prewarm(void)
+{
+	unsigned long sym_addr;
+
+	sym_addr = ds_compat_sym("update_or_create_entry_locked");
+	if (sym_addr) {
+		dlc_ghost_prewarm_addr(sym_addr);
+		pr_info("[droid_lkm_vendor] ghost: pre-warmed for update_or_create_entry_locked (0x%lx)\n",
+			sym_addr);
+	}
+
+	sym_addr = ds_compat_sym("midas_record_task_times");
+	if (sym_addr) {
+		dlc_ghost_prewarm_addr(sym_addr);
+		pr_info("[droid_lkm_vendor] ghost: pre-warmed for midas_record_task_times (0x%lx)\n",
+			sym_addr);
+	}
+}
+
 void dlc_ghost_exit(void)
 {
 	ds_hook_remove(&dlc_ftbv_hook);
@@ -288,6 +365,8 @@ int dlc_ghost_init(void)
 		return ret;
 	}
 	dlc_ghost_audit_pid_max();
+
+	dlc_ghost_prewarm();
 
 	dlc_module_address = (typeof(dlc_module_address))dlc_vendor_syms.module_address;
 	if (!dlc_module_address) {
@@ -323,7 +402,8 @@ int dlc_ghost_init(void)
 		dlc_ghost_ready = false;
 		return ret;
 	}
-	dlc_ftbv_orig = (typeof(dlc_ftbv_orig))dlc_ftbv_hook.orig;
+	smp_wmb();
+	WRITE_ONCE(dlc_ftbv_orig, (typeof(dlc_ftbv_orig))dlc_ftbv_hook.orig);
 	pr_info("[droid_lkm_vendor] ghost: find_task_by_vpid hooked, match=%s\n",
 		dlc_ghost_match ? dlc_ghost_match : "");
 	return 0;
