@@ -8,6 +8,8 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/sched.h>
+#include <linux/pid_namespace.h>
+#include <linux/rcupdate.h>
 #include <linux/list.h>
 #include <linux/refcount.h>
 #include <linux/string.h>
@@ -44,40 +46,9 @@ static struct task_struct dlc_ghost_task;
 static bool dlc_ghost_ready;
 static unsigned int dlc_ghost_hits;
 
-/* Fast caller cache for hot-path interrupt context (e.g. oplus_bsp_midas) */
-#define DLC_GHOST_CACHE_SZ 32
-static unsigned long dlc_ghost_cached_pages[DLC_GHOST_CACHE_SZ];
-static unsigned int dlc_ghost_cache_idx;
-
-static bool dlc_ghost_cache_hit(unsigned long ip)
-{
-	unsigned long page = ip & PAGE_MASK;
-	int i;
-
-	if (unlikely(!page))
-		return false;
-
-	for (i = 0; i < DLC_GHOST_CACHE_SZ; i++) {
-		if (READ_ONCE(dlc_ghost_cached_pages[i]) == page)
-			return true;
-	}
-	return false;
-}
-
-static void dlc_ghost_cache_add(unsigned long ip)
-{
-	unsigned long page = ip & PAGE_MASK;
-	unsigned int idx;
-
-	if (unlikely(!page))
-		return;
-
-	if (dlc_ghost_cache_hit(ip))
-		return;
-
-	idx = dlc_ghost_cache_idx++ % DLC_GHOST_CACHE_SZ;
-	WRITE_ONCE(dlc_ghost_cached_pages[idx], page);
-}
+/* Hot-path Midas fixed page & single-entry MRU for other vendor callers (16 bytes total) */
+static unsigned long dlc_midas_page;
+static unsigned long dlc_other_mru_page;
 
 static bool dlc_ghost_match_module(const char *name)
 {
@@ -91,14 +62,55 @@ static bool dlc_ghost_match_module(const char *name)
 	return strncmp(name, dlc_ghost_match, n) == 0;
 }
 
+static inline bool dlc_ghost_is_vendor(unsigned long ret_ip)
+{
+	unsigned long page = ret_ip & PAGE_MASK;
+	struct module *mod;
+	bool match = false;
+
+	if (unlikely(!page))
+		return false;
+
+	/* Fast path 1: midas dedicated page (100% hit in interrupt, zero thrashing) */
+	if (likely(page == READ_ONCE(dlc_midas_page)))
+		return true;
+
+	/* Fast path 2: MRU page for other burst vendor callers */
+	if (page == READ_ONCE(dlc_other_mru_page))
+		return true;
+
+	/* Slow path: parse kernel module tree */
+	if (dlc_module_address) {
+		preempt_disable();
+		mod = dlc_module_address(ret_ip);
+		if (mod)
+			match = dlc_ghost_match_module(mod->name);
+		preempt_enable();
+
+		if (match) {
+			/*
+			 * Cross-device fallback:
+			 * Bind to dlc_midas_page if not yet set or module is oplus_bsp_midas;
+			 * otherwise store in the general MRU slot.
+			 */
+			if (!READ_ONCE(dlc_midas_page) ||
+			    (mod && strcmp(mod->name, "oplus_bsp_midas") == 0))
+				WRITE_ONCE(dlc_midas_page, page);
+			else
+				WRITE_ONCE(dlc_other_mru_page, page);
+			return true;
+		}
+	}
+	return false;
+}
+
 // _RET_IP_ must be read before calling orig
 __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 {
 	unsigned long ret_ip = (unsigned long)_RET_IP_;
 	typeof(&find_task_by_vpid) orig;
 	struct task_struct *task = NULL;
-	struct module *mod;
-	bool match = false;
+	bool is_vendor = false;
 
 	orig = READ_ONCE(dlc_ftbv_orig);
 	if (likely(orig))
@@ -115,29 +127,44 @@ __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 		return task;
 	smp_rmb();
 
-	/* Fast path: check page cache without scanning kernel module tree */
-	if (dlc_ghost_cache_hit(ret_ip)) {
-		match = true;
-	} else if (dlc_module_address) {
-		preempt_disable();
-		mod = dlc_module_address(ret_ip);
-		if (mod)
-			match = dlc_ghost_match_module(mod->name);
-		preempt_enable();
-		if (match)
-			dlc_ghost_cache_add(ret_ip);
+	/*
+	 * Guard 1 (Container isolation / prevent Namespace Escape):
+	 * Caller must be verified as an authorized vendor module before
+	 * any cross-namespace fallback is permitted. Non-vendor callers
+	 * maintain standard isolation and receive native NULL.
+	 */
+	is_vendor = dlc_ghost_is_vendor(ret_ip);
+	if (!is_vendor)
+		return task;
+
+	/*
+	 * Guard 2 (Root cause self-healing for vendor PID mismatches):
+	 * Vendor drivers often supply host init_pid_ns TGIDs. In container
+	 * child namespaces, find_task_by_vpid misses. Fall back to init_pid_ns
+	 * under rcu_read_lock to retrieve the real task_struct.
+	 */
+	if (dlc_vendor_syms.find_task_by_pid_ns && dlc_vendor_syms.init_pid_ns) {
+		struct pid_namespace *ns = task_active_pid_ns(current);
+		if (ns && ns != dlc_vendor_syms.init_pid_ns) {
+			rcu_read_lock();
+			task = dlc_vendor_syms.find_task_by_pid_ns(vnr, dlc_vendor_syms.init_pid_ns);
+			rcu_read_unlock();
+			if (task)
+				return task;
+		}
 	}
 
-	if (match) {
-		dlc_ghost_hits++;
-		if (dlc_ghost_hits <= DLC_GHOST_LOG_MAX)
-			pr_info("[droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s (orig=%s)\n",
-				(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM,
-				orig ? "miss" : "race-guard");
-		return &dlc_ghost_task;
-	}
-
-	return task;
+	/*
+	 * Guard 3 (Airbag fallback: Ghost Task Sentinel):
+	 * Task is dead or in !orig microsecond race window; hand out
+	 * sentinel to avert vendor driver null dereference panic.
+	 */
+	dlc_ghost_hits++;
+	if (dlc_ghost_hits <= DLC_GHOST_LOG_MAX)
+		pr_info("[droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s (orig=%s)\n",
+			(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM,
+			orig ? "miss" : "race-guard");
+	return &dlc_ghost_task;
 }
 
 enum {
@@ -317,32 +344,24 @@ static void dlc_ghost_audit_pid_max(void)
 		value, cap);
 }
 
-static void dlc_ghost_prewarm_addr(unsigned long addr)
-{
-	int i;
-
-	if (!addr)
-		return;
-	for (i = -2; i <= 2; i++)
-		dlc_ghost_cache_add(addr + i * PAGE_SIZE);
-}
-
 static void dlc_ghost_prewarm(void)
 {
 	unsigned long sym_addr;
 
+	/*
+	 * Cross-device fallback chain:
+	 * Try known midas hook target symbols in descending specificity.
+	 */
 	sym_addr = ds_compat_sym("update_or_create_entry_locked");
-	if (sym_addr) {
-		dlc_ghost_prewarm_addr(sym_addr);
-		pr_info("[droid_lkm_vendor] ghost: pre-warmed for update_or_create_entry_locked (0x%lx)\n",
-			sym_addr);
-	}
+	if (!sym_addr)
+		sym_addr = ds_compat_sym("update_entry_locked");
+	if (!sym_addr)
+		sym_addr = ds_compat_sym("midas_record_task_times");
 
-	sym_addr = ds_compat_sym("midas_record_task_times");
 	if (sym_addr) {
-		dlc_ghost_prewarm_addr(sym_addr);
-		pr_info("[droid_lkm_vendor] ghost: pre-warmed for midas_record_task_times (0x%lx)\n",
-			sym_addr);
+		WRITE_ONCE(dlc_midas_page, sym_addr & PAGE_MASK);
+		pr_info("[droid_lkm_vendor] ghost: pre-warmed midas page (0x%lx)\n",
+			sym_addr & PAGE_MASK);
 	}
 }
 
