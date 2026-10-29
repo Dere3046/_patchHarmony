@@ -224,9 +224,18 @@ void droid_lkm_userns_destroy(struct droid_lkm_userns *u)
 	droid_lkm_userns_put(u);
 }
 
+/*
+ * the count is read on every status read: a snapshot taken at init would report whatever was
+ * alive during the load and never move again, which is the opposite of what the line is for
+ */
+static void droid_lkm_userns_objects_detail(char *buf, size_t size)
+{
+	scnprintf(buf, size, "%u live of %u", droid_lkm_userns_live(),
+		  DROID_LKM_USERNS_MAX);
+}
+
 int droid_lkm_userns_init(void)
 {
-	char detail[32];
 	int ret;
 
 	if (IS_ENABLED(CONFIG_USER_NS)) {
@@ -290,9 +299,9 @@ int droid_lkm_userns_init(void)
 	droid_lkm_misc_info("userns ready\n");
 	droid_lkm_userns_selftest_run();
 
-	/* reported after the sample, so the count includes the namespace it left behind */
-	scnprintf(detail, sizeof(detail), "%u live", droid_lkm_userns_live());
-	droid_lkm_misc_report("userns objects", "ready", detail);
+	/* after the sample, so a namespace it left behind is already counted */
+	droid_lkm_misc_report_live("userns objects", "ready",
+				   droid_lkm_userns_objects_detail);
 
 	return 0;
 }
