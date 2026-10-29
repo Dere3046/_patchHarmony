@@ -18,91 +18,40 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
 #   oppo ddl history table
-# the vendor module supports 6.6 and 6.12 only; the main module is the one
-# being ported to the other branches
+# nothing in this ko is version specific: every symbol and struct offset it needs
+# is resolved at runtime through KallRecon and Type_info, so the only compile time
+# constraint is the target's own headers. build it on every branch this repo
+# targets and let the zero-warning build be the gate. 6.18 has no ddk image, so
+# it rides along unbuilt -- take it back out if it ever fails to compile there.
 VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
 	$(KDIR)/include/generated/utsrelease.h 2>/dev/null)
-DLKM_OPT := $(strip $(if $(filter 6.6 6.12,$(VENDOR_VER)),\
-	$(shell grep -q ' nop_mnt_idmap$$' $(KDIR)/System.map 2>/dev/null && echo m),))
-obj-$(DLKM_OPT) += droid_lkm_vendor.o
+VENDOR_OPT := $(strip $(if $(filter 5.10 5.15 6.1 6.6 6.12 6.18,$(VENDOR_VER)),m,))
+obj-$(VENDOR_OPT) += droid_lkm_vendor.o
 DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 	src/compat/vendor/ddl_hit.o src/compat/vendor/vendor_syms.o \
 	src/compat/ds_compat.o src/compat/ds_layout_anchor.o \
 	src/hook/ds_hook.o
 droid_lkm_vendor-y := $(DLC_VENDOR_OBJS) $(DEPS_OBJS_ALL)
 
-# droid_lkm_misc.o is not built yet, it is unfinished; re-enable it with the
-# line below once its sources are ready
-# obj-$(DLKM_OPT) += droid_lkm_misc.o
+# third ko in the same Kbuild: container scoped kernel features missing on stock GKI
+# (devtmpfs, fake userns, xt_addrtype). it starts at 5.15: 5.10 predates the
+# ns_common refcount and the owner plumbing the user namespace work is built on,
+# so that branch stays off until it is ported
+MISC_OPT := $(strip $(if $(filter 5.15 6.1 6.6 6.12,$(VENDOR_VER)),m,))
+obj-$(MISC_OPT) += droid_lkm_misc.o
 DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_ksym.o \
+	src/misc/misc_layout.o \
 	src/misc/misc_scope.o \
 	src/misc/misc_proc.o \
 	src/misc/xt/xt_reg.o \
 	src/misc/xt/xt_addrtype.o \
-	src/misc/xt/xt_AUDIT.o \
-	src/misc/xt/xt_CHECKSUM.o \
-	src/misc/xt/xt_CLASSIFY.o \
-	src/misc/xt/xt_cluster.o \
-	src/misc/xt/xt_cgroup.o \
-	src/misc/xt/xt_comment.o \
-	src/misc/xt/xt_connlabel.o \
-	src/misc/xt/xt_connlimit.o \
-	src/misc/xt/xt_conntrack.o \
-	src/misc/xt/xt_cpu.o \
-	src/misc/xt/xt_dccp.o \
-	src/misc/xt/xt_devgroup.o \
-	src/misc/xt/xt_dscp.o \
-	src/misc/xt/xt_DSCP.o \
-	src/misc/xt/xt_ecn.o \
-	src/misc/xt/xt_esp.o \
-	src/misc/xt/xt_hl.o \
-	src/misc/xt/xt_HL.o \
-	src/misc/xt/xt_HMARK.o \
-	src/misc/xt/xt_ipcomp.o \
-	src/misc/xt/xt_iprange.o \
-	src/misc/xt/xt_l2tp.o \
-	src/misc/xt/xt_LED.o \
-	src/misc/xt/xt_length.o \
-	src/misc/xt/xt_limit.o \
-	src/misc/xt/xt_LOG.o \
-	src/misc/xt/xt_mac.o \
-	src/misc/xt/xt_mark.o \
-	src/misc/xt/xt_MASQUERADE.o \
-	src/misc/xt/xt_multiport.o \
-	src/misc/xt/xt_nat.o \
-	src/misc/xt/xt_NETMAP.o \
-	src/misc/xt/xt_NFLOG.o \
-	src/misc/xt/xt_NFQUEUE.o \
-	src/misc/xt/xt_owner.o \
-	src/misc/xt/xt_pkttype.o \
-	src/misc/xt/xt_policy.o \
-	src/misc/xt/xt_quota.o \
-	src/misc/xt/xt_RATEEST.o \
-	src/misc/xt/xt_rateest.o \
-	src/misc/xt/xt_realm.o \
-	src/misc/xt/xt_sctp.o \
-	src/misc/xt/xt_SECMARK.o \
-	src/misc/xt/xt_socket.o \
-	src/misc/xt/xt_state.o \
-	src/misc/xt/xt_statistic.o \
-	src/misc/xt/xt_string.o \
-	src/misc/xt/xt_tcpmss.o \
-	src/misc/xt/xt_TCPMSS.o \
-	src/misc/xt/xt_TCPOPTSTRIP.o \
-	src/misc/xt/xt_tcpudp.o \
-	src/misc/xt/xt_TEE.o \
-	src/misc/xt/xt_time.o \
-	src/misc/xt/xt_TPROXY.o \
-	src/misc/xt/xt_TRACE.o \
-	src/misc/xt/xt_u32.o \
 	src/misc/devtmpfs/devtmpfs.o \
 	src/misc/userns/userns_core.o \
 	src/misc/userns/userns_map.o \
 	src/misc/userns/userns_cred.o \
 	src/misc/userns/userns_nsops.o \
 	src/misc/userns/userns_owner.o \
-	src/misc/userns/userns_ids.o \
 	src/misc/userns/userns_proc.o \
 	src/misc/userns/userns_selftest.o \
 	src/misc/userns/userns_captrace.o \
@@ -157,6 +106,14 @@ ccflags-y += -I$(src)/src/main/ipcns/compat
 ccflags-y += -I$(src)/src/misc -I$(src)/src/misc/xt -I$(src)/src/misc/userns
 ccflags-y += -I$(src)/src/misc/devtmpfs
 ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
+
+# the target kernel's own tree, which the ddk lays out at $(KDIR)/source. a few
+# declarations this module needs are in headers the kernel never publishes, the
+# driver core's drivers/base/base.h above all, and a function pointer's type has to
+# come from the kernel's declaration rather than a second guess at it: clang's cfi
+# hashes the whole type, so a guess that drifts by one qualifier is a fatal cfi
+# failure on the device
+ccflags-y += -I$(KDIR)/source
 
 # 6.18 turns on -Wmissing-prototypes, and this module both defines kernel
 # names the newer kernel stops declaring and exposes entry points through

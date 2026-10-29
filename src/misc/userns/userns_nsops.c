@@ -7,6 +7,9 @@
 
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/module.h>
+#include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/nsproxy.h>
@@ -21,9 +24,36 @@
 static struct ns_common *droid_lkm_userns_host_placeholder;
 static struct proc_ns_operations *droid_lkm_userns_host_ops;
 
-static struct ns_common *droid_lkm_userns_get(struct task_struct *task)
+/*
+ * the module the ns kind is registered with, held for as long as the registration is.
+ * the two entry points are reached through an address resolved by name, not through an
+ * import, so the loader records no dependency and nothing stops droid_lkm from being
+ * unloaded first, which would leave ns_kind_unregister() pointing into freed text
+ */
+static struct module *droid_lkm_userns_kind_owner;
+
+static void droid_lkm_userns_kind_hold(void)
 {
-	struct droid_lkm_userns *u = droid_lkm_userns_of(task);
+	struct module *mod;
+
+	if (!droid_lkm_misc_ks.module_address || !droid_lkm_misc_ks.ns_kind_register)
+		return;
+
+	/* the same idiom the module loader uses: the pointer is only stable with preempt off */
+	preempt_disable();
+	mod = droid_lkm_misc_ks.module_address(
+		(unsigned long)droid_lkm_misc_ks.ns_kind_register);
+	if (mod && !try_module_get(mod))
+		mod = NULL;
+	preempt_enable();
+
+	if (mod)
+		droid_lkm_userns_kind_owner = mod;
+}
+
+static struct ns_common *droid_lkm_userns_nsops_get(struct task_struct *task)
+{
+	struct droid_lkm_userns *u = droid_lkm_userns_get_of(task);
 
 	if (u)
 		return &u->uns.ns;
@@ -31,15 +61,86 @@ static struct ns_common *droid_lkm_userns_get(struct task_struct *task)
 	return droid_lkm_userns_host_placeholder;
 }
 
-static void droid_lkm_userns_put(struct ns_common *ns)
+static void droid_lkm_userns_nsops_put(struct ns_common *ns)
 {
-	/* a fake namespace is owned by the module and lives until unload */
+	struct user_namespace *uns;
+	struct droid_lkm_userns *u;
+
+	if (!ns || ns == droid_lkm_userns_host_placeholder)
+		return;
+
+	uns = container_of(ns, struct user_namespace, ns);
+	u = droid_lkm_userns_from_ns(uns);
+	if (u)
+		droid_lkm_userns_put(u);
 }
 
+/*
+ * setns(CLONE_NEWUSER): join a namespace this module made. The fd is an nsfs inode whose
+ * ns_common is the fake namespace's own, so the work is the gate and the credential.
+ *
+ * Nothing is committed by the caller: prepare_nsset() built nsset->cred, a private copy,
+ * and nsset_cred() is the kernel's own accessor for it. The commit is ours to do, because
+ * commit_nsset() commits that credential only inside #ifdef CONFIG_USER_NS, and this module
+ * refuses to run when that is enabled. Without it the install is applied and then thrown
+ * away, and setns() reports success with nothing changed.
+ */
 static int droid_lkm_userns_install(struct nsset *nsset, struct ns_common *ns)
 {
-	/* setns into a user namespace is not wired yet, keep the fd inert */
-	return -EINVAL;
+	struct user_namespace *uns = container_of(ns, struct user_namespace, ns);
+	struct droid_lkm_userns *u;
+	struct cred *cred;
+
+	/* the initial namespace is not one of ours: climbing back out is refused, as upstream */
+	if (uns == droid_lkm_userns_init_uns)
+		return -EPERM;
+
+	u = droid_lkm_userns_from_ns(uns);
+	if (!u || !nsset)
+		return -EINVAL;
+
+	/* reentering the namespace a task already sits in would hand it its own authority again */
+	if (current_cred()->user_ns == &u->uns)
+		return -EINVAL;
+
+	/* every thread of a group has to agree on its user namespace */
+	if (!thread_group_empty(current))
+		return -EINVAL;
+
+	/*
+	 * two gates, the way the pid namespace install does it: the caller has to hold
+	 * CAP_SYS_ADMIN where it stands and over the namespace it is entering. The first one
+	 * keeps this consistent with unshare(), which refuses a creator that has euid 0 but no
+	 * capability over the initial namespace instead of handing it a namespace it would then
+	 * hold full authority in. The second is answered by the security_capable chokepoint,
+	 * which walks the fake chain: the initial namespace's root may join any of them and a
+	 * task may join a namespace below its own, while an ancestor or a sibling is refused
+	 */
+	if (!ns_capable(current_cred()->user_ns, CAP_SYS_ADMIN) ||
+	    !ns_capable(&u->uns, CAP_SYS_ADMIN))
+		return -EPERM;
+
+	cred = nsset_cred(nsset);
+	if (!cred)
+		return -EINVAL;
+
+	/*
+	 * the joined task gets the same credential a creator gets. It has to: this kernel does
+	 * no id translation, so authority inside a fake namespace is expressed entirely as the
+	 * capability set plus the user_ns pointer, and the gate above already established that
+	 * the caller holds CAP_SYS_ADMIN over the namespace it is entering
+	 */
+	droid_lkm_userns_install_cred(cred, u);
+
+	/*
+	 * commit_nsset() would commit this for us on a kernel with CONFIG_USER_NS, where it
+	 * runs the same call; here that branch is compiled out. Taking the reference out of the
+	 * set afterwards is what keeps put_nsset() from dropping a credential the task now owns
+	 */
+	droid_lkm_misc_ks.commit_creds(cred);
+	nsset->cred = NULL;
+
+	return 0;
 }
 
 static struct user_namespace *droid_lkm_userns_owner(struct ns_common *ns)
@@ -51,7 +152,7 @@ static struct ns_common *droid_lkm_userns_get_parent(struct ns_common *ns)
 {
 	struct user_namespace *uns = container_of(ns, struct user_namespace, ns);
 
-	if (uns->parent)
+	if (uns->parent && uns->parent != droid_lkm_userns_init_uns)
 		return &uns->parent->ns;
 
 	return ERR_PTR(-EPERM);
@@ -60,8 +161,8 @@ static struct ns_common *droid_lkm_userns_get_parent(struct ns_common *ns)
 static const struct proc_ns_operations droid_lkm_userns_ops_real = {
 	.name = "user",
 	.type = CLONE_NEWUSER,
-	.get = droid_lkm_userns_get,
-	.put = droid_lkm_userns_put,
+	.get = droid_lkm_userns_nsops_get,
+	.put = droid_lkm_userns_nsops_put,
 	.install = droid_lkm_userns_install,
 	.owner = droid_lkm_userns_owner,
 	.get_parent = droid_lkm_userns_get_parent,
@@ -113,6 +214,7 @@ static const struct droid_lkm_ns_kind_reg droid_lkm_userns_kind = {
 int droid_lkm_userns_nsops_init(void)
 {
 	struct ns_common *ns;
+	int ret;
 
 	droid_lkm_userns_host_ops = kzalloc(sizeof(*droid_lkm_userns_host_ops),
 					    GFP_KERNEL);
@@ -134,17 +236,53 @@ int droid_lkm_userns_nsops_init(void)
 
 	ns->inum = PROC_USER_INIT_INO;
 	ns->ops = droid_lkm_userns_host_ops;
-	refcount_set(&ns->count, 1);
+	refcount_set(droid_lkm_userns_ns_ref(ns), 1);
 	droid_lkm_userns_host_placeholder = ns;
 
-	if (!droid_lkm_misc_ks.ns_kind_register)
-		return -ENODEV;
+	if (!droid_lkm_misc_ks.ns_kind_register) {
+		ret = -ENODEV;
+		goto err_free;
+	}
 
-	return droid_lkm_misc_ks.ns_kind_register(&droid_lkm_userns_kind);
+	ret = droid_lkm_misc_ks.ns_kind_register(&droid_lkm_userns_kind);
+	if (ret)
+		goto err_free;
+
+	droid_lkm_userns_kind_hold();
+
+	/*
+	 * the registration is the point past which this module cannot be unloaded: from here
+	 * the main module stores this module's proc_ns_operations in /proc/<pid>/ns/user
+	 * inodes it owns and keeps them for as long as the task lives
+	 */
+	droid_lkm_userns_stay_resident(
+		"proc_ns_operations cached in /proc/<pid>/ns/user inodes");
+
+	return 0;
+
+err_free:
+	kfree(droid_lkm_userns_host_placeholder);
+	droid_lkm_userns_host_placeholder = NULL;
+	kfree(droid_lkm_userns_host_ops);
+	droid_lkm_userns_host_ops = NULL;
+	return ret;
 }
 
 void droid_lkm_userns_nsops_exit(void)
 {
+	/* the provider reference goes last, after the last call into it */
 	if (droid_lkm_misc_ks.ns_kind_unregister)
 		droid_lkm_misc_ks.ns_kind_unregister(&droid_lkm_userns_kind);
+
+	if (droid_lkm_userns_kind_owner) {
+		module_put(droid_lkm_userns_kind_owner);
+		droid_lkm_userns_kind_owner = NULL;
+	}
+
+	droid_lkm_userns_release_resident();
+
+	kfree(droid_lkm_userns_host_placeholder);
+	droid_lkm_userns_host_placeholder = NULL;
+	kfree(droid_lkm_userns_host_ops);
+	droid_lkm_userns_host_ops = NULL;
 }

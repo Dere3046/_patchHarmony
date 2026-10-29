@@ -28,7 +28,21 @@ extern bool droid_lkm_misc_verbose;
 /* the GKI gate rejects part of the export list, so unexported and risky symbols are resolved by name */
 static inline unsigned long __nocfi droid_lkm_misc_sym(const char *name)
 {
-	return kallrecon_klp(name);
+	unsigned long addr;
+
+	if (!name || !kallrecon_klp)
+		return 0;
+
+	addr = kallrecon_klp(name);
+	/*
+	 * kallrecon_klp is the kernel's own kallsyms_lookup_name. a kernel that
+	 * hides an address from it, _text being the image base, still has the
+	 * symbol in its table, so the library's own walk answers that case
+	 */
+	if (!addr)
+		addr = kallsyms_name_to_addr(name);
+
+	return addr;
 }
 
 #endif

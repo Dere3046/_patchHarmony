@@ -22,6 +22,14 @@
  */
 void droid_lkm_misc_report(const char *name, const char *state, const char *detail);
 
+/*
+ * the same line with a detail that is produced on every read instead of stored once, for a
+ * count that moves after init. the callback runs under the report lock, so it must be a
+ * short read of a value the caller already guards, and must not report itself
+ */
+void droid_lkm_misc_report_live(const char *name, const char *state,
+				void (*live)(char *buf, size_t size));
+
 /* how many features reported this state, for the install time coverage check */
 unsigned int droid_lkm_misc_report_count(const char *state);
 

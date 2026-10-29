@@ -14,6 +14,8 @@ on:
 jobs:
   build-matrix:
     strategy:
+      # one branch failing must not hide what the other six did
+      fail-fast: false
       matrix:
         kmi:
           - android12-5.10
@@ -55,4 +57,5 @@ jobs:
           path: |
             out/${{ matrix.kmi }}/droid_lkm.ko
             out/${{ matrix.kmi }}/droid_lkm_vendor.ko
+            out/${{ matrix.kmi }}/droid_lkm_misc.ko
           if-no-files-found: warn
