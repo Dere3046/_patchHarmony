@@ -39,10 +39,12 @@
 #endif
 #include <linux/err.h>
 #include <linux/uidgid.h>
+#include <asm/ptrace.h>
 
 #include "misc.h"
 #include "misc_layout.h"
 #include "misc_ksym.h"
+#include "misc_proc.h"
 #include "userns.h"
 #include "hk_inline.h"
 #include "ds_shapes.h"
@@ -58,6 +60,7 @@ static struct hk_inline droid_lkm_userns_mountcap_hook;
 static struct hk_inline droid_lkm_userns_prepcred_hook;
 static struct hk_inline droid_lkm_userns_putcred_hook;
 static struct hk_inline droid_lkm_userns_seccap_hook;
+static struct hk_inline droid_lkm_userns_fchownat_hook;
 
 static int (*droid_lkm_userns_unshare_orig)(unsigned long flags);
 static int (*droid_lkm_userns_nsproxy_orig)(unsigned long unshare_flags,
@@ -76,6 +79,7 @@ static void (*droid_lkm_userns_putcred_orig)(struct cred *cred);
 static int (*droid_lkm_userns_seccap_orig)(const struct cred *cred,
 					   struct user_namespace *ns,
 					   int cap, unsigned int opts);
+static long (*droid_lkm_userns_fchownat_orig)(const struct pt_regs *regs);
 
 __nocfi noinline struct cred *droid_lkm_userns_prepcred_wrap(void)
 {
@@ -401,6 +405,53 @@ __nocfi noinline bool droid_lkm_userns_mountcap_wrap(struct fs_context *fc)
 	return true;
 }
 
+/*
+ * chown_common() resolves the new owner with make_kuid(current_user_ns(), user), and this
+ * kernel compiles away both halves of that: current_user_ns() is the constant initial
+ * namespace and make_kuid() is the identity. A container asking for its own id 0 therefore
+ * writes kuid 0, the host's root, onto a file it owns, and then cannot undo it: the id it
+ * holds is no longer mapped in its namespace, so every later chown or chmod there is
+ * refused and the file stays behind on the host as root's.
+ *
+ * There is no function to correct, the map lookup is inlined at every caller, so do at the
+ * entry what the missing lookup would have done: translate the id the caller named, and
+ * refuse one the namespace does not map, which is the -EINVAL that make_kuid() returning
+ * an invalid id makes chown_common() return.
+ */
+__nocfi noinline long droid_lkm_userns_fchownat_wrap(const struct pt_regs *regs)
+{
+	typeof(droid_lkm_userns_fchownat_orig) orig =
+		READ_ONCE(droid_lkm_userns_fchownat_orig);
+	struct pt_regs *r = (struct pt_regs *)regs;
+	struct droid_lkm_userns *u;
+	u32 id;
+
+	if (unlikely(!orig))
+		orig = (typeof(orig))droid_lkm_userns_fchownat_hook.orig;
+	if (!orig)
+		return -EINVAL;
+
+	u = droid_lkm_userns_of(current);
+	if (u) {
+		/* -1 is not an id, it is how the caller says leave this one alone */
+		if ((uid_t)r->regs[2] != (uid_t)-1) {
+			id = droid_lkm_userns_map_down(u, (uid_t)r->regs[2], true);
+			if (id == DROID_LKM_USERNS_ID_UNMAPPED)
+				return -EINVAL;
+			r->regs[2] = id;
+		}
+
+		if ((gid_t)r->regs[3] != (gid_t)-1) {
+			id = droid_lkm_userns_map_down(u, (gid_t)r->regs[3], false);
+			if (id == DROID_LKM_USERNS_ID_UNMAPPED)
+				return -EINVAL;
+			r->regs[3] = id;
+		}
+	}
+
+	return orig(regs);
+}
+
 static int droid_lkm_userns_hook_one(struct hk_inline *h, const char *sym,
 				     const char *wrap, void **orig)
 {
@@ -468,6 +519,22 @@ int droid_lkm_userns_hooks_init(void)
 	if (ret)
 		goto out_prepcred;
 
+	/*
+	 * an addition rather than a requirement: without it ids pass through as they always
+	 * have, which is wrong for chown but no worse than the answer the kernel gives on
+	 * its own, and losing the whole feature over it would be the larger harm
+	 */
+	if (droid_lkm_userns_hook_one(&droid_lkm_userns_fchownat_hook,
+				      "__arm64_sys_fchownat",
+				      "droid_lkm_userns_fchownat_wrap",
+				      (void **)&droid_lkm_userns_fchownat_orig)) {
+		droid_lkm_misc_report("userns chown map", "unsupported",
+				      "fchownat hook unavailable, ids pass through");
+	} else {
+		droid_lkm_misc_report("userns chown map", "ready",
+				      "uid and gid translated at fchownat");
+	}
+
 	droid_lkm_misc_info("userns hooks installed\n");
 	return 0;
 
@@ -490,6 +557,7 @@ out_unshare:
 
 void droid_lkm_userns_hooks_exit(void)
 {
+	hk_inline_unhook(&droid_lkm_userns_fchownat_hook);
 	hk_inline_unhook(&droid_lkm_userns_putcred_hook);
 	hk_inline_unhook(&droid_lkm_userns_prepcred_hook);
 	hk_inline_unhook(&droid_lkm_userns_seccap_hook);
