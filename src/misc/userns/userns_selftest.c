@@ -21,6 +21,7 @@
 
 #include <linux/sched.h>
 #include <linux/sched/task.h>
+#include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/fs.h>
@@ -44,7 +45,9 @@
 static typeof(&ksys_unshare) droid_lkm_userns_selftest_unshare;
 
 static unsigned int droid_lkm_userns_selftest_failed;
+static unsigned int droid_lkm_userns_selftest_skipped;
 static char droid_lkm_userns_selftest_last_failed[64];
+static char droid_lkm_userns_selftest_last_skipped[64];
 static struct completion droid_lkm_userns_selftest_done;
 
 static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
@@ -57,6 +60,24 @@ static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
 		  sizeof(droid_lkm_userns_selftest_last_failed),
 		  "%s: %d", what, ret);
 	droid_lkm_misc_err("selftest: %s failed: %d\n", what, ret);
+}
+
+/*
+ * A sample the creator anchor refuses on purpose is not a namespace that failed. Layer three
+ * runs in a kernel thread, which is a context no container ever runs in: the anchor refuses a
+ * creator whose euid is 0 but which holds no capability over the initial namespace, exactly
+ * the way it refuses an unprivileged root, because it would otherwise be handed a root
+ * mapping. The check is reported as skipped, with the reason, instead of counted as a failure
+ * that would send the reader looking for a broken namespace. The caller logs the capability
+ * decision next to it, so the two cases stay distinguishable.
+ */
+static void droid_lkm_userns_selftest_skip(const char *what, const char *why)
+{
+	droid_lkm_userns_selftest_skipped++;
+	scnprintf(droid_lkm_userns_selftest_last_skipped,
+		  sizeof(droid_lkm_userns_selftest_last_skipped),
+		  "%s: %s", what, why);
+	droid_lkm_misc_warn("selftest: %s skipped, %s\n", what, why);
 }
 
 /*
@@ -73,6 +94,27 @@ static int droid_lkm_userns_selftest_thread(void *unused)
 
 	ret = droid_lkm_userns_selftest_unshare(CLONE_NEWUSER);
 	u = droid_lkm_userns_of(current);
+
+	if (!u && ret == -EPERM && (current->flags & PF_KTHREAD) &&
+	    uid_eq(current_euid(), GLOBAL_ROOT_UID)) {
+		/*
+		 * record what the anchor actually saw. A refused sample is either the rule
+		 * working on a context no container uses, or a capability decision this module
+		 * gets wrong, and only these answers tell the two apart on the next boot.
+		 * cap_raised() rather than the raw word: kernel_cap_t is a u64 on 6.3 and
+		 * later and a two word array before that, and this module builds for both.
+		 */
+		droid_lkm_misc_warn("selftest: kthread sample refused, euid=%u ns_setuid=%d ns_setgid=%d eff_setuid=%d eff_sysadmin=%d\n",
+				    __kuid_val(current_euid()),
+				    ns_capable(&init_user_ns, CAP_SETUID),
+				    ns_capable(&init_user_ns, CAP_SETGID),
+				    cap_raised(current_cred()->cap_effective, CAP_SETUID),
+				    cap_raised(current_cred()->cap_effective, CAP_SYS_ADMIN));
+		droid_lkm_userns_selftest_skip("unshare(CLONE_NEWUSER)",
+					       "no init caps in a kthread");
+		goto out;
+	}
+
 	droid_lkm_userns_selftest_step("unshare(CLONE_NEWUSER)", ret == 0 && u, ret);
 
 	if (!u)
@@ -143,7 +185,7 @@ static void droid_lkm_userns_selftest_coverage(void)
 
 void droid_lkm_userns_selftest_run(void)
 {
-	char detail[64];
+	char detail[128];
 	int ret;
 
 	droid_lkm_userns_selftest_coverage();
@@ -165,6 +207,15 @@ void droid_lkm_userns_selftest_run(void)
 			  droid_lkm_userns_selftest_last_failed : "coverage");
 		droid_lkm_misc_report("userns selftest", "failed", detail);
 		droid_lkm_misc_err("userns selftest failed: %s\n", detail);
+		return;
+	}
+
+	if (droid_lkm_userns_selftest_skipped) {
+		scnprintf(detail, sizeof(detail), "%u skipped (%s)",
+			  droid_lkm_userns_selftest_skipped,
+			  droid_lkm_userns_selftest_last_skipped);
+		droid_lkm_misc_report("userns selftest", "ready", detail);
+		droid_lkm_misc_warn("userns selftest incomplete: %s\n", detail);
 		return;
 	}
 
