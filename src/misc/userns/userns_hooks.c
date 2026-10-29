@@ -81,15 +81,28 @@ static int (*droid_lkm_userns_seccap_orig)(const struct cred *cred,
 					   int cap, unsigned int opts);
 static long (*droid_lkm_userns_fchownat_orig)(const struct pt_regs *regs);
 
+/*
+ * the original behind a hook, falling back to the hook's own record. a wrapper can run in
+ * the window between hk_inline_hook() installing the detour and the pointer being published
+ * here, and a NULL at that point would be an indirect call into nothing. the fallback is
+ * what makes the window harmless, and it was written out at every wrapper before
+ */
+#define DROID_LKM_USERNS_ORIG(_name)                                           \
+	({                                                                     \
+		typeof(droid_lkm_userns_##_name##_orig) __orig =               \
+			READ_ONCE(droid_lkm_userns_##_name##_orig);            \
+		if (unlikely(!__orig))                                         \
+			__orig = (typeof(__orig))                              \
+				droid_lkm_userns_##_name##_hook.orig;          \
+		__orig;                                                        \
+	})
+
 __nocfi noinline struct cred *droid_lkm_userns_prepcred_wrap(void)
 {
 	struct cred *new;
 	struct droid_lkm_userns *u;
-	typeof(droid_lkm_userns_prepcred_orig) orig =
-		READ_ONCE(droid_lkm_userns_prepcred_orig);
+	typeof(droid_lkm_userns_prepcred_orig) orig = DROID_LKM_USERNS_ORIG(prepcred);
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_prepcred_hook.orig;
 	if (!orig)
 		return NULL;
 
@@ -112,11 +125,7 @@ __nocfi noinline struct cred *droid_lkm_userns_prepcred_wrap(void)
 __nocfi noinline void droid_lkm_userns_putcred_wrap(struct cred *cred)
 {
 	struct droid_lkm_userns *u;
-	typeof(droid_lkm_userns_putcred_orig) orig =
-		READ_ONCE(droid_lkm_userns_putcred_orig);
-
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_putcred_hook.orig;
+	typeof(droid_lkm_userns_putcred_orig) orig = DROID_LKM_USERNS_ORIG(putcred);
 
 	if (cred) {
 		u = droid_lkm_userns_from_ns(cred->user_ns);
@@ -133,11 +142,8 @@ __nocfi noinline int droid_lkm_userns_seccap_wrap(const struct cred *cred,
 						  int cap, unsigned int opts)
 {
 	struct droid_lkm_userns *targ_u, *cred_u;
-	typeof(droid_lkm_userns_seccap_orig) orig =
-		READ_ONCE(droid_lkm_userns_seccap_orig);
+	typeof(droid_lkm_userns_seccap_orig) orig = DROID_LKM_USERNS_ORIG(seccap);
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_seccap_hook.orig;
 	if (!orig)
 		return -EINVAL;
 
@@ -213,11 +219,8 @@ __nocfi noinline int droid_lkm_userns_nsproxy_wrap(unsigned long unshare_flags,
 	const struct cred *cred = new_cred ? new_cred : current_cred();
 	struct droid_lkm_userns *u = cred ? droid_lkm_userns_from_ns(cred->user_ns) : NULL;
 	struct nsproxy *nsp;
-	typeof(droid_lkm_userns_nsproxy_orig) orig =
-		READ_ONCE(droid_lkm_userns_nsproxy_orig);
+	typeof(droid_lkm_userns_nsproxy_orig) orig = DROID_LKM_USERNS_ORIG(nsproxy);
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_nsproxy_hook.orig;
 	if (!orig)
 		return -EINVAL;
 
@@ -254,11 +257,8 @@ __nocfi noinline int droid_lkm_userns_unshare_wrap(unsigned long flags)
 	const struct cred *old;
 	unsigned long rest;
 	int ret;
-	typeof(droid_lkm_userns_unshare_orig) orig =
-		READ_ONCE(droid_lkm_userns_unshare_orig);
+	typeof(droid_lkm_userns_unshare_orig) orig = DROID_LKM_USERNS_ORIG(unshare);
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_unshare_hook.orig;
 	if (!orig)
 		return -EINVAL;
 
@@ -303,11 +303,8 @@ __nocfi noinline int droid_lkm_userns_creds_wrap(struct task_struct *p,
 	struct droid_lkm_userns *u;
 	unsigned long rest;
 	int ret;
-	typeof(droid_lkm_userns_creds_orig) orig =
-		READ_ONCE(droid_lkm_userns_creds_orig);
+	typeof(droid_lkm_userns_creds_orig) orig = DROID_LKM_USERNS_ORIG(creds);
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_creds_hook.orig;
 	if (!orig)
 		return -EINVAL;
 
@@ -347,11 +344,12 @@ __nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 						     int cap)
 {
 	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_inodecap_orig) orig = DROID_LKM_USERNS_ORIG(inodecap);
 
-	if (!droid_lkm_userns_inodecap_orig)
+	if (!orig)
 		return false;
 
-	if (droid_lkm_userns_inodecap_orig(DROID_LKM_IDMAP_PASS inode, cap))
+	if (orig(DROID_LKM_IDMAP_PASS inode, cap))
 		return true;
 
 	/* an idmapped mount is a different rule set, it arrives with the lens */
@@ -385,11 +383,12 @@ __nocfi noinline bool droid_lkm_userns_inodecap_wrap(DROID_LKM_IDMAP_PARAM
 __nocfi noinline bool droid_lkm_userns_mountcap_wrap(struct fs_context *fc)
 {
 	struct droid_lkm_userns *u;
+	typeof(droid_lkm_userns_mountcap_orig) orig = DROID_LKM_USERNS_ORIG(mountcap);
 
-	if (!droid_lkm_userns_mountcap_orig)
+	if (!orig)
 		return false;
 
-	if (droid_lkm_userns_mountcap_orig(fc))
+	if (orig(fc))
 		return true;
 
 	if (!fc || !fc->fs_type || (fc->fs_type->fs_flags & FS_USERNS_MOUNT))
@@ -420,14 +419,11 @@ __nocfi noinline bool droid_lkm_userns_mountcap_wrap(struct fs_context *fc)
  */
 __nocfi noinline long droid_lkm_userns_fchownat_wrap(const struct pt_regs *regs)
 {
-	typeof(droid_lkm_userns_fchownat_orig) orig =
-		READ_ONCE(droid_lkm_userns_fchownat_orig);
+	typeof(droid_lkm_userns_fchownat_orig) orig = DROID_LKM_USERNS_ORIG(fchownat);
 	struct pt_regs *r = (struct pt_regs *)regs;
 	struct droid_lkm_userns *u;
 	u32 id;
 
-	if (unlikely(!orig))
-		orig = (typeof(orig))droid_lkm_userns_fchownat_hook.orig;
 	if (!orig)
 		return -EINVAL;
 

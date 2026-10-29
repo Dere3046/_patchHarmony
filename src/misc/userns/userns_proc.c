@@ -222,6 +222,7 @@ static struct user_namespace *droid_lkm_userns_proc_ns(struct inode *inode)
 {
 	struct pid *pid = inode->i_private;
 	struct user_namespace *ns = NULL;
+	struct droid_lkm_userns *u;
 	struct task_struct *task;
 	const struct cred *cred;
 
@@ -235,9 +236,21 @@ static struct user_namespace *droid_lkm_userns_proc_ns(struct inode *inode)
 	cred = get_task_cred(task);
 	if (cred) {
 		ns = cred->user_ns;
-		if (ns != droid_lkm_userns_init_uns &&
-		    !droid_lkm_userns_is_ours(ns))
-			ns = NULL;
+
+		if (ns != droid_lkm_userns_init_uns) {
+			u = droid_lkm_userns_from_ns(ns);
+			if (!u) {
+				ns = NULL;
+			} else {
+				/*
+				 * take the reference the open will hold here, while the
+				 * credential still pins the namespace, so a task exiting
+				 * between this lookup and the open cannot free it
+				 */
+				droid_lkm_userns_get(u);
+			}
+		}
+
 		put_cred(cred);
 	}
 	put_task_struct(task);
@@ -248,15 +261,11 @@ static struct user_namespace *droid_lkm_userns_proc_ns(struct inode *inode)
 static int droid_lkm_userns_proc_open(struct inode *inode, struct file *file)
 {
 	struct user_namespace *ns = droid_lkm_userns_proc_ns(inode);
-	struct droid_lkm_userns *u;
 
 	if (!ns)
 		return -ENOENT;
 
-	u = droid_lkm_userns_from_ns(ns);
-	if (u)
-		droid_lkm_userns_get(u);
-
+	/* the reference this file holds was taken by the lookup, which is where it was safe */
 	file->private_data = ns;
 
 	return 0;

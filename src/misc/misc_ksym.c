@@ -81,6 +81,12 @@ int droid_lkm_misc_ksym_init(void)
 	    !droid_lkm_misc_ks.ns_kind_unregister)
 		droid_lkm_misc_warn("droid_lkm not loaded, ns kind registration skipped\n");
 
+	/* optional: without it the ns kind is registered without a reference on its owner */
+	droid_lkm_misc_ks.module_address = (typeof(droid_lkm_misc_ks.module_address))
+		droid_lkm_misc_resolve("__module_address");
+	if (!droid_lkm_misc_ks.module_address)
+		droid_lkm_misc_warn("optional thunk missing: __module_address\n");
+
 	/* capability trace only, a kernel without it loses the trace and nothing else */
 	droid_lkm_misc_ks.cap_capable = (typeof(droid_lkm_misc_ks.cap_capable))
 		droid_lkm_misc_resolve("cap_capable");

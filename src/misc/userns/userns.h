@@ -78,7 +78,16 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 void droid_lkm_userns_destroy(struct droid_lkm_userns *u);
 struct droid_lkm_userns *droid_lkm_userns_get(struct droid_lkm_userns *u);
 void droid_lkm_userns_put(struct droid_lkm_userns *u);
+
+/*
+ * borrowed: the pointer is only valid while the caller holds rcu_read_lock(). every
+ * caller that keeps it past that point wants droid_lkm_userns_get_of() instead
+ */
 struct droid_lkm_userns *droid_lkm_userns_of(struct task_struct *task);
+
+/* the same lookup, with a reference the caller owns and has to put */
+struct droid_lkm_userns *droid_lkm_userns_get_of(struct task_struct *task);
+
 struct droid_lkm_userns *droid_lkm_userns_from_ns(struct user_namespace *uns);
 unsigned int droid_lkm_userns_live(void);
 bool droid_lkm_userns_is_ours(const struct user_namespace *uns);
@@ -90,6 +99,16 @@ const struct proc_ns_operations *droid_lkm_userns_ops(void);
 const struct proc_ns_operations *droid_lkm_userns_ops_for(struct task_struct *task);
 int droid_lkm_userns_nsops_init(void);
 void droid_lkm_userns_nsops_exit(void);
+
+/*
+ * why this module cannot be unloaded while the fake user namespace is up, and the one
+ * place that says so. taken by droid_lkm_userns_nsops_init() at the point where the
+ * main module starts handing out this module's proc_ns_operations, released by
+ * droid_lkm_userns_nsops_exit() on the way back out
+ */
+void droid_lkm_userns_stay_resident(const char *why);
+void droid_lkm_userns_release_resident(void);
+bool droid_lkm_userns_is_resident(void);
 
 /* an id no namespace maps, the same value map_id_up() returns */
 #define DROID_LKM_USERNS_ID_UNMAPPED ((u32)-1)

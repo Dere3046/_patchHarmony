@@ -7,6 +7,7 @@
 #define DROID_LKM_MISC_KSYM_H
 
 #include <linux/types.h>
+#include <linux/module.h>
 #include <linux/cred.h>
 #include <linux/key.h>
 #include <linux/proc_ns.h>
@@ -63,6 +64,12 @@ struct droid_lkm_misc_ksym {
 	/* optional main module entry points, exported by droid_lkm.ko itself */
 	int (*ns_kind_register)(const struct droid_lkm_ns_kind_reg *kind);
 	void (*ns_kind_unregister)(const struct droid_lkm_ns_kind_reg *kind);
+
+	/*
+	 * the module those two live in. reached by address rather than imported, so the
+	 * loader knows nothing about the dependency and the reference has to be taken here
+	 */
+	typeof(&__module_address)	module_address;
 
 	/* the single capability decision function, resolved for the trace only */
 	int (*cap_capable)(const struct cred *cred, struct user_namespace *targ_ns,

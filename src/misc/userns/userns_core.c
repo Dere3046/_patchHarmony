@@ -15,6 +15,7 @@
 
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/rcupdate.h>
 
 #include "misc.h"
 #include "misc_layout.h"
@@ -27,7 +28,7 @@
 static LIST_HEAD(droid_lkm_userns_list);
 static DEFINE_SPINLOCK(droid_lkm_userns_lock);
 static unsigned int droid_lkm_userns_count;
-static bool droid_lkm_userns_module_pinned;
+static bool droid_lkm_userns_resident;
 
 static inline bool droid_lkm_refcount_dec_and_lock_irqsave(
 	refcount_t *r, spinlock_t *lock, unsigned long *flags)
@@ -100,16 +101,46 @@ struct droid_lkm_userns *droid_lkm_userns_from_ns(struct user_namespace *uns)
 
 struct droid_lkm_userns *droid_lkm_userns_of(struct task_struct *task)
 {
+	struct droid_lkm_userns *u;
 	const struct cred *cred;
 
 	if (!task)
 		return NULL;
 
+	/*
+	 * a credential a task is not running on is replaced under RCU and freed from a
+	 * callback, so reading one without the read lock can hand back a namespace that is
+	 * already gone. current's own is stable, but this is asked about other tasks too:
+	 * /proc/<pid>/ns/user resolves a stranger's namespace by pid
+	 */
+	rcu_read_lock();
 	cred = droid_lkm_misc_task_cred(task);
-	if (!cred)
+	u = cred ? droid_lkm_userns_from_ns(cred->user_ns) : NULL;
+	rcu_read_unlock();
+
+	/* not a reference: the caller may only read through it, or take its own at once */
+	return u;
+}
+
+/*
+ * the lookup with the reference taken before the section that makes the pointer valid
+ * ends. the credential it came from is the only thing holding the namespace, and that
+ * credential can be replaced the moment the lock is dropped
+ */
+struct droid_lkm_userns *droid_lkm_userns_get_of(struct task_struct *task)
+{
+	struct droid_lkm_userns *u;
+
+	if (!task)
 		return NULL;
 
-	return droid_lkm_userns_from_ns(cred->user_ns);
+	rcu_read_lock();
+	u = droid_lkm_userns_of(task);
+	if (u)
+		droid_lkm_userns_get(u);
+	rcu_read_unlock();
+
+	return u;
 }
 
 /*
@@ -139,16 +170,6 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 
 	if (parent && parent->level > 32)
 		return ERR_PTR(-EINVAL);
-
-	{
-		unsigned long flags;
-		spin_lock_irqsave(&droid_lkm_userns_lock, flags);
-		if (droid_lkm_userns_count >= DROID_LKM_USERNS_MAX) {
-			spin_unlock_irqrestore(&droid_lkm_userns_lock, flags);
-			return ERR_PTR(-ENOSPC);
-		}
-		spin_unlock_irqrestore(&droid_lkm_userns_lock, flags);
-	}
 
 	u = kzalloc(sizeof(*u), GFP_KERNEL);
 	if (!u)
@@ -198,25 +219,45 @@ struct droid_lkm_userns *droid_lkm_userns_create(struct droid_lkm_userns *parent
 	if (u->privileged)
 		droid_lkm_userns_map_identity(u);
 	else if (!droid_lkm_userns_map_confine(u)) {
-		if (parent)
-			droid_lkm_userns_put(parent);
-		droid_lkm_misc_ks.proc_free_inum(inum);
-		kfree(u);
-		return ERR_PTR(-EPERM);
+		ret = -EPERM;
+		goto out_discard;
 	}
 
+	/*
+	 * the limit is checked where the object is published rather than before it is built.
+	 * a check that drops the lock and comes back later cannot hold the count it read, and
+	 * two creators racing past it would both be let in
+	 */
 	{
 		unsigned long flags;
+		bool room;
+
 		spin_lock_irqsave(&droid_lkm_userns_lock, flags);
-		list_add_tail(&u->link, &droid_lkm_userns_list);
-		droid_lkm_userns_count++;
+		room = droid_lkm_userns_count < DROID_LKM_USERNS_MAX;
+		if (room) {
+			list_add_tail(&u->link, &droid_lkm_userns_list);
+			droid_lkm_userns_count++;
+		}
 		spin_unlock_irqrestore(&droid_lkm_userns_lock, flags);
+
+		if (!room) {
+			ret = -ENOSPC;
+			goto out_discard;
+		}
 	}
 
 	droid_lkm_misc_dbg("userns create %p level=%u inum=%u owner=%u privileged=%u\n", u,
 		u->level, inum, __kuid_val(u->uns.owner), u->privileged);
 
 	return u;
+
+out_discard:
+	if (parent)
+		droid_lkm_userns_put(parent);
+	droid_lkm_misc_ks.proc_free_inum(inum);
+	kfree(u);
+
+	return ERR_PTR(ret);
 }
 
 void droid_lkm_userns_destroy(struct droid_lkm_userns *u)
@@ -232,6 +273,55 @@ static void droid_lkm_userns_objects_detail(char *buf, size_t size)
 {
 	scnprintf(buf, size, "%u live of %u", droid_lkm_userns_live(),
 		  DROID_LKM_USERNS_MAX);
+}
+
+/*
+ * Why the module cannot be unloaded once the fake user namespace is offered.
+ *
+ * Everything this module owns a count for is already safe: a credential, a mount namespace
+ * and an fs_context each hold a struct droid_lkm_userns reference, taken by the hooks that
+ * install them and dropped by the hooks that replace them, because get_user_ns() and
+ * put_user_ns() are stubs here and the kernel cannot hold one for us. That part needs no
+ * pin, and an earlier version of this file pinned the module for the wrong reason.
+ *
+ * What no count reaches is the procfs inode. The main module's pid directory hook stores
+ * this module's proc_ns_operations in a /proc/<pid>/ns/user inode and keeps it for as long
+ * as the task lives, and this module's own id map files store their file_operations the
+ * same way. Neither inode takes a reference, neither can be enumerated to be invalidated,
+ * and the dentry cache outlives every namespace object that made them. So the reference is
+ * taken where the first of them can be made, which is when the ns kind is registered, and
+ * it is never given back while the module lives: from that point delete_module() answers
+ * -EBUSY, and that is the whole unload story. devtmpfs and xt can be released through the
+ * release parameter because what they leave behind is a mount and a registry entry that
+ * they can take back; this cannot.
+ */
+void droid_lkm_userns_stay_resident(const char *why)
+{
+	if (droid_lkm_userns_resident)
+		return;
+
+	if (!try_module_get(THIS_MODULE)) {
+		droid_lkm_misc_err("userns: no residency reference, unload is unsafe\n");
+		return;
+	}
+
+	droid_lkm_userns_resident = true;
+	droid_lkm_misc_info("userns resident: rmmod now fails with -EBUSY (%s)\n", why);
+}
+
+/* the other half, for a build that never registers the ns kind */
+void droid_lkm_userns_release_resident(void)
+{
+	if (!droid_lkm_userns_resident)
+		return;
+
+	droid_lkm_userns_resident = false;
+	module_put(THIS_MODULE);
+}
+
+bool droid_lkm_userns_is_resident(void)
+{
+	return droid_lkm_userns_resident;
 }
 
 int droid_lkm_userns_init(void)
@@ -265,22 +355,10 @@ int droid_lkm_userns_init(void)
 	}
 
 	/*
-	 * every credential in a fake namespace points into this module, and the proc
-	 * inodes carry this module's f_op, but neither holds a reference the kernel
-	 * would drop for us: with CONFIG_USER_NS off put_user_ns() is a stub. pin the
-	 * module here, before the first object exists, and let rmmod fail while the
-	 * feature is up. that is the only lifecycle that cannot leave a stale pointer
-	 * behind, and it matches the main module's permanent ns hook pin
+	 * the residency is already taken by now, at nsops_init, where the main module starts
+	 * handing out this module's proc_ns_operations. report it rather than take it here:
+	 * an operator who cannot rmmod deserves to see why
 	 */
-	if (!try_module_get(THIS_MODULE)) {
-		droid_lkm_misc_report("userns", "unsupported", "module reference");
-		droid_lkm_userns_hooks_exit();
-		droid_lkm_userns_owner_exit();
-		droid_lkm_userns_nsops_exit();
-		return -EBUSY;
-	}
-	droid_lkm_userns_module_pinned = true;
-
 	droid_lkm_userns_map_selftest();
 
 	ret = droid_lkm_userns_captrace_init();
@@ -296,6 +374,11 @@ int droid_lkm_userns_init(void)
 			      "unshare clone namespace entry credential swap mount");
 	droid_lkm_misc_report("userns cap trace", droid_lkm_userns_captrace_on ?
 			      "on" : "off", "captrace=<bool>");
+	droid_lkm_misc_report("userns residency",
+			      droid_lkm_userns_is_resident() ? "resident" : "releasable",
+			      droid_lkm_userns_is_resident() ?
+			      "rmmod -EBUSY: ns inodes are not revocable" :
+			      "rmmod allowed");
 	droid_lkm_misc_info("userns ready\n");
 	droid_lkm_userns_selftest_run();
 
@@ -318,32 +401,28 @@ unsigned int droid_lkm_userns_live(void)
 	return count;
 }
 
+/*
+ * reached only by a build that never took the residency: droid_lkm_userns_nsops_init()
+ * takes it the moment the ns kind is registered, and nothing gives it back, so on a
+ * normal load delete_module() stops before this runs. keep it correct anyway, because
+ * userns=0 and a kernel without the main module both get here
+ *
+ * the objects are not freed here. droid_lkm_userns_put() unlinks an object before it
+ * schedules the work that frees it, so an object still on the list has a reference and a
+ * free here would race droid_lkm_userns_free_work() over the same allocation
+ */
 void droid_lkm_userns_exit(void)
 {
-	struct droid_lkm_userns *u, *tmp;
-	unsigned long flags;
+	unsigned int live;
 
 	droid_lkm_userns_proc_exit();
 	droid_lkm_userns_captrace_exit();
 	droid_lkm_userns_hooks_exit();
 	droid_lkm_userns_owner_exit();
-
-	spin_lock_irqsave(&droid_lkm_userns_lock, flags);
-	list_for_each_entry_safe(u, tmp, &droid_lkm_userns_list, link) {
-		list_del_init(&u->link);
-		spin_unlock_irqrestore(&droid_lkm_userns_lock, flags);
-
-		droid_lkm_misc_ks.proc_free_inum(u->uns.ns.inum);
-		kfree(u);
-
-		spin_lock_irqsave(&droid_lkm_userns_lock, flags);
-	}
-	spin_unlock_irqrestore(&droid_lkm_userns_lock, flags);
-
 	droid_lkm_userns_nsops_exit();
 
-	if (droid_lkm_userns_module_pinned) {
-		droid_lkm_userns_module_pinned = false;
-		module_put(THIS_MODULE);
-	}
+	live = droid_lkm_userns_live();
+	if (live)
+		droid_lkm_misc_err("userns: unload with %u live, the references are wrong\n",
+				   live);
 }
