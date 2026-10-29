@@ -18,13 +18,14 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
 #   oppo ddl history table
-# the vendor module starts at 6.1. the gate here used to probe for nop_mnt_idmap,
-# which only exists from 6.3, but nothing in this ko references it -- the id map
-# work belongs to droid_lkm_misc -- so the probe stood in for a version number
-# and took 6.1 out with it. 5.15 is untested, so it stays off for now.
+# nothing in this ko is version specific: every symbol and struct offset it needs
+# is resolved at runtime through KallRecon and Type_info, so the only compile time
+# constraint is the target's own headers. build it on every branch this repo
+# targets and let the zero-warning build be the gate. 6.18 has no ddk image, so
+# it rides along unbuilt -- take it back out if it ever fails to compile there.
 VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
 	$(KDIR)/include/generated/utsrelease.h 2>/dev/null)
-VENDOR_OPT := $(strip $(if $(filter 6.1 6.6 6.12,$(VENDOR_VER)),m,))
+VENDOR_OPT := $(strip $(if $(filter 5.10 5.15 6.1 6.6 6.12 6.18,$(VENDOR_VER)),m,))
 obj-$(VENDOR_OPT) += droid_lkm_vendor.o
 DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 	src/compat/vendor/ddl_hit.o src/compat/vendor/vendor_syms.o \
