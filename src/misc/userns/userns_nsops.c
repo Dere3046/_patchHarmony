@@ -7,6 +7,8 @@
 
 #include <linux/slab.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/nsproxy.h>
@@ -47,10 +49,72 @@ static void droid_lkm_userns_nsops_put(struct ns_common *ns)
 		droid_lkm_userns_put(u);
 }
 
+/*
+ * setns(CLONE_NEWUSER): join a namespace this module made. The fd is an nsfs inode whose
+ * ns_common is the fake namespace's own, so the work is the gate and the credential.
+ *
+ * Nothing is committed by the caller: prepare_nsset() built nsset->cred, a private copy,
+ * and nsset_cred() is the kernel's own accessor for it. The commit is ours to do, because
+ * commit_nsset() commits that credential only inside #ifdef CONFIG_USER_NS, and this module
+ * refuses to run when that is enabled. Without it the install is applied and then thrown
+ * away, and setns() reports success with nothing changed.
+ */
 static int droid_lkm_userns_install(struct nsset *nsset, struct ns_common *ns)
 {
-	/* setns into a user namespace is not wired yet, keep the fd inert */
-	return -EINVAL;
+	struct user_namespace *uns = container_of(ns, struct user_namespace, ns);
+	struct droid_lkm_userns *u;
+	struct cred *cred;
+
+	/* the initial namespace is not one of ours: climbing back out is refused, as upstream */
+	if (uns == droid_lkm_userns_init_uns)
+		return -EPERM;
+
+	u = droid_lkm_userns_from_ns(uns);
+	if (!u || !nsset)
+		return -EINVAL;
+
+	/* reentering the namespace a task already sits in would hand it its own authority again */
+	if (current_cred()->user_ns == &u->uns)
+		return -EINVAL;
+
+	/* every thread of a group has to agree on its user namespace */
+	if (!thread_group_empty(current))
+		return -EINVAL;
+
+	/*
+	 * two gates, the way the pid namespace install does it: the caller has to hold
+	 * CAP_SYS_ADMIN where it stands and over the namespace it is entering. The first one
+	 * keeps this consistent with unshare(), which refuses a creator that has euid 0 but no
+	 * capability over the initial namespace instead of handing it a namespace it would then
+	 * hold full authority in. The second is answered by the security_capable chokepoint,
+	 * which walks the fake chain: the initial namespace's root may join any of them and a
+	 * task may join a namespace below its own, while an ancestor or a sibling is refused
+	 */
+	if (!ns_capable(current_cred()->user_ns, CAP_SYS_ADMIN) ||
+	    !ns_capable(&u->uns, CAP_SYS_ADMIN))
+		return -EPERM;
+
+	cred = nsset_cred(nsset);
+	if (!cred)
+		return -EINVAL;
+
+	/*
+	 * the joined task gets the same credential a creator gets. It has to: this kernel does
+	 * no id translation, so authority inside a fake namespace is expressed entirely as the
+	 * capability set plus the user_ns pointer, and the gate above already established that
+	 * the caller holds CAP_SYS_ADMIN over the namespace it is entering
+	 */
+	droid_lkm_userns_install_cred(cred, u);
+
+	/*
+	 * commit_nsset() would commit this for us on a kernel with CONFIG_USER_NS, where it
+	 * runs the same call; here that branch is compiled out. Taking the reference out of the
+	 * set afterwards is what keeps put_nsset() from dropping a credential the task now owns
+	 */
+	droid_lkm_misc_ks.commit_creds(cred);
+	nsset->cred = NULL;
+
+	return 0;
 }
 
 static struct user_namespace *droid_lkm_userns_owner(struct ns_common *ns)
