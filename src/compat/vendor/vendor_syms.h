@@ -9,6 +9,7 @@
 #include <linux/types.h>
 
 struct path;
+struct pid_namespace;
 
 struct dlc_vendor_syms {
 	unsigned long init_task;
@@ -19,6 +20,8 @@ struct dlc_vendor_syms {
 	int *pid_max;
 	void *ddl_sdata;
 	void *ddl_update;
+	struct task_struct *(*find_task_by_pid_ns)(pid_t nr, struct pid_namespace *ns);
+	struct pid_namespace *init_pid_ns;
 };
 
 extern struct dlc_vendor_syms dlc_vendor_syms;

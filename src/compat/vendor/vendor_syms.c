@@ -19,6 +19,8 @@ static struct ds_compat_sym dlc_vendor_table[] = {
 	{ "pid_max", (void **)&dlc_vendor_syms.pid_max },
 	{ "ddl_sdata", (void **)&dlc_vendor_syms.ddl_sdata },
 	{ "update_ddl_hit_history", (void **)&dlc_vendor_syms.ddl_update },
+	{ "find_task_by_pid_ns", (void **)&dlc_vendor_syms.find_task_by_pid_ns },
+	{ "init_pid_ns", (void **)&dlc_vendor_syms.init_pid_ns },
 };
 
 void dlc_vendor_syms_init(void)
