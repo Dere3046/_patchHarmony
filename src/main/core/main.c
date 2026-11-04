@@ -103,8 +103,8 @@ static int __init droid_lkm_init(void)
 	if (ret)
 		return ret;
 
-	droid_lkm_info("params: verbose=%d skip_sysvipc=%d skip_do_exit=%d no_fake_ns=%d\n",
-		droid_lkm_verbose, droid_lkm_slot_skip_sysvipc(), droid_lkm_pidns_skip_do_exit(),
+	droid_lkm_info("params: verbose=%d skip_sysvipc=%d no_fake_ns=%d\n",
+		droid_lkm_verbose, droid_lkm_slot_skip_sysvipc(),
 		droid_lkm_slot_no_fake_ns());
 	droid_lkm_probe_symbols();
 

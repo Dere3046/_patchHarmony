@@ -12,6 +12,39 @@
 
 #include "ds.h"
 #include "ds_ksym.h"
+#include "native_compat.h"
+
+static struct pid_namespace *(*droid_native_real_copy_pid_ns_fn)(
+	droid_native_ns_flags_t flags, struct user_namespace *user_ns,
+	struct pid_namespace *old_ns);
+static void (*droid_native_real_put_pid_ns_fn)(struct pid_namespace *ns);
+static bool droid_native_pidns_runtime_checked;
+static bool droid_native_pidns_runtime;
+
+bool droid_native_pidns_runtime_supported(void)
+{
+	if (!droid_native_pidns_runtime_checked) {
+		droid_native_real_copy_pid_ns_fn = (void *)droid_lkm_sym("copy_pid_ns");
+		droid_native_real_put_pid_ns_fn = (void *)droid_lkm_sym("put_pid_ns");
+		droid_native_pidns_runtime =
+			droid_native_real_copy_pid_ns_fn &&
+			droid_native_real_put_pid_ns_fn;
+		droid_native_pidns_runtime_checked = true;
+	}
+	return droid_native_pidns_runtime;
+}
+
+__nocfi struct pid_namespace *droid_native_real_copy_pid_ns(
+	droid_native_ns_flags_t flags, struct user_namespace *user_ns,
+	struct pid_namespace *old_ns)
+{
+	return droid_native_real_copy_pid_ns_fn(flags, user_ns, old_ns);
+}
+
+__nocfi void droid_native_real_put_pid_ns(struct pid_namespace *ns)
+{
+	droid_native_real_put_pid_ns_fn(ns);
+}
 
 __nocfi int droid_native_ns_alloc_inum(struct ns_common *ns)
 {

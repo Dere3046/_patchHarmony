@@ -42,23 +42,6 @@ bool() {
 	esac
 }
 
-# 允许负数：pid_max_cap=-1 表示从不封顶
-sint() {
-	v=$(conf "$1" "$2")
-	case "$v" in
-	'') echo "$2" ;;
-	-*)
-		rest=${v#-}
-		case "$rest" in
-		'' | *[!0-9]*) echo "$2" ;;
-		*) echo "$v" ;;
-		esac
-		;;
-	*[!0-9]*) echo "$2" ;;
-	*) echo "$v" ;;
-	esac
-}
-
 loaded() {
 	[ -r /proc/modules ] && grep -q "^$1 " /proc/modules
 }
@@ -222,7 +205,7 @@ else
 		"nspid_append=$(bool nspid_append 1)" \
 		"skip_sysvipc=$(bool skip_sysvipc 0)" \
 		"no_fake_ns=$(bool no_fake_ns 0)" \
-		"skip_do_exit=$(bool skip_do_exit 0)" \
+		"nsproxy=$(bool nsproxy 0)" \
 		"degrade=$(bool degrade 0)"
 	rc=$?
 
@@ -257,8 +240,7 @@ else
 	ph_log "loading droid_lkm_vendor.ko"
 	guarded_insmod "$COMPAT" \
 		"ghost=$(bool ghost 1)" \
-		"ghost_match=$(conf ghost_match oplus_)" \
-		"pid_max_cap=$(sint pid_max_cap 0)"
+		"ghost_match=$(conf ghost_match oplus_)"
 	rc=$?
 	if [ "$rc" -eq 0 ] && loaded droid_lkm_vendor; then
 		ph_log "droid_lkm_vendor loaded"

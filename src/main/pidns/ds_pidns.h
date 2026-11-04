@@ -35,8 +35,9 @@ extern const struct proc_ns_operations droid_lkm_pidns_for_children_ops;
 
 int droid_lkm_pidns_init(void);
 
-bool droid_lkm_pidns_skip_do_exit(void);
 void droid_lkm_pidns_exit(void);
+void droid_lkm_pidns_exit_cleanup(struct task_struct *task);
+bool droid_lkm_pidns_nsproxy_enabled(void);
 
 struct pid_namespace *droid_lkm_pidns_create(struct pid_namespace *parent);
 

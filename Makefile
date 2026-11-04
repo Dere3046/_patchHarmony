@@ -17,7 +17,7 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
-#   oppo ddl history table
+#   oppo ddl history bounds
 # the vendor module supports 6.6 and 6.12 only; the main module is the one
 # being ported to the other branches
 VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
@@ -121,14 +121,16 @@ ccflags-y += -DDROID_LKM_NATIVE_PID -DDROID_LKM_PID_BOTH
 ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
 ccflags-y += -I$(src)/src/native/compat
 NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
-	src/native/compat/pid_namespace.o src/native/shim.o
+	src/native/compat/nsproxy.o src/native/compat/pid_namespace.o \
+	src/native/shim.o
 endif
 ifeq ($(DROID_LKM_NATIVE_PID),1)
 ccflags-y += -DDROID_LKM_NATIVE_PID
 ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
 ccflags-y += -I$(src)/src/native/compat
 NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
-	src/native/compat/pid_namespace.o src/native/shim.o
+	src/native/compat/nsproxy.o src/native/compat/pid_namespace.o \
+	src/native/shim.o
 endif
 
 droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \

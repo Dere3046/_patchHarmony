@@ -65,7 +65,7 @@ static struct kmem_cache *create_pid_cachep(unsigned int level)
 		return kc;
 
 	snprintf(name, sizeof(name), "pid_%u", level + 1);
-	len = sizeof(struct pid) + level * sizeof(struct upid);
+	len = sizeof(struct pid) + (level + 1) * sizeof(struct upid);
 	mutex_lock(&pid_caches_mutex);
 	/* Name collision forces to do allocation under mutex. */
 	if (!*pkc)
@@ -170,6 +170,8 @@ void droid_native_pidns_destroy_work(struct work_struct *work)
 struct pid_namespace *copy_pid_ns(droid_native_ns_flags_t flags,
 	struct user_namespace *user_ns, struct pid_namespace *old_ns)
 {
+	if (droid_native_pidns_runtime_supported())
+		return droid_native_real_copy_pid_ns(flags, user_ns, old_ns);
 	if (!(flags & CLONE_NEWPID))
 		return droid_native_pid_namespace_get(old_ns);
 	if (task_active_pid_ns(current) != old_ns)
@@ -188,6 +190,11 @@ void droid_native_pidns_kref_release(struct kref *kref)
 
 void put_pid_ns(struct pid_namespace *ns)
 {
+	if (droid_native_pidns_runtime_supported()) {
+		if (ns && ns != &init_pid_ns)
+			droid_native_real_put_pid_ns(ns);
+		return;
+	}
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
 	if (ns && ns != &init_pid_ns &&
 	    droid_native_pid_namespace_put_ref(ns))
@@ -481,6 +488,7 @@ const struct proc_ns_operations pidns_for_children_operations = {
 
 int droid_native_pidns_init(void)
 {
+	(void)droid_native_pidns_runtime_supported();
 	pid_ns_cachep = kmem_cache_create("droid_native_pid_namespace",
 					 sizeof(struct pid_namespace), 0,
 					 SLAB_ACCOUNT, NULL);
@@ -492,22 +500,14 @@ int droid_native_pidns_init(void)
 
 void droid_native_pidns_exit(void)
 {
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(pid_cache); i++)
-		if (pid_cache[i]) {
-			kmem_cache_destroy(pid_cache[i]);
-			pid_cache[i] = NULL;
-		}
-	if (pid_ns_cachep) {
-		kmem_cache_destroy(pid_ns_cachep);
-		pid_ns_cachep = NULL;
-	}
 }
 
 struct pid_namespace *droid_native_create_pid_namespace(
 	struct user_namespace *user_ns, struct pid_namespace *parent)
 {
+	if (droid_native_pidns_runtime_supported())
+		return droid_native_real_copy_pid_ns(CLONE_NEWPID, user_ns,
+						     parent);
 	return create_pid_namespace(user_ns, parent);
 }
 

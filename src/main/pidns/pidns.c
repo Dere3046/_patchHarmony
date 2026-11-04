@@ -20,7 +20,6 @@
 #include <linux/capability.h>
 #include <linux/cred.h>
 #include <linux/user_namespace.h>
-#include <linux/kprobes.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
@@ -35,6 +34,7 @@
 #include "ds.h"
 #ifdef DROID_LKM_NATIVE_PID
 #include "native_pid.h"
+#include "compat/nsproxy.h"
 #endif
 #include "ds_shapes.h"
 #include "ds_ksym.h"
@@ -59,11 +59,6 @@ static const struct proc_ns_operations *droid_lkm_pidns_neutral_ops;
 
 static struct task_struct *droid_lkm_pidns_retire_reaper;
 
-static bool droid_lkm_skip_do_exit;
-bool droid_lkm_pidns_skip_do_exit(void) { return droid_lkm_skip_do_exit; }
-module_param_named(skip_do_exit, droid_lkm_skip_do_exit, bool, 0444);
-MODULE_PARM_DESC(skip_do_exit, "do not register the do_exit kprobe (diagnostic only)");
-
 #if defined(DROID_LKM_NATIVE_PID) && !defined(DROID_LKM_PID_BOTH)
 #define DROID_LKM_PID_DEFAULT "native"
 #else
@@ -73,6 +68,10 @@ static char droid_lkm_pid_impl[8] = DROID_LKM_PID_DEFAULT;
 module_param_string(pid_impl, droid_lkm_pid_impl, sizeof(droid_lkm_pid_impl), 0444);
 MODULE_PARM_DESC(pid_impl, "pid namespace backend: main or native");
 static bool droid_lkm_pid_use_native;
+static bool droid_lkm_nsproxy_enable;
+module_param_named(nsproxy, droid_lkm_nsproxy_enable, bool, 0444);
+MODULE_PARM_DESC(nsproxy, "take over nsproxy lifecycle, default 0");
+bool droid_lkm_pidns_nsproxy_enabled(void) { return droid_lkm_nsproxy_enable; }
 static struct kmem_cache *droid_lkm_pid_cache[MAX_PID_NS_LEVEL];
 static DEFINE_MUTEX(droid_lkm_pid_caches_mutex);
 
@@ -91,8 +90,6 @@ static struct task_struct *droid_lkm_reaper_task;
 static LIST_HEAD(droid_lkm_zap_list);
 static DEFINE_SPINLOCK(droid_lkm_zap_lock);
 static DECLARE_WAIT_QUEUE_HEAD(droid_lkm_zap_wq);
-
-static struct kprobe droid_lkm_kp_do_exit;
 
 static struct pid_namespace *to_pid_ns(struct ns_common *ns)
 {
@@ -704,22 +701,22 @@ void droid_lkm_pidns_queue_zap(struct pid_namespace *ns)
 	wake_up_interruptible(&droid_lkm_zap_wq);
 }
 
-static __nocfi noinline int droid_lkm_do_exit_pre(struct kprobe *p, struct pt_regs *regs)
+void droid_lkm_pidns_exit_cleanup(struct task_struct *task)
 {
-	struct pid_namespace *ns = task_active_pid_ns(current);
+	struct pid_namespace *ns = task_active_pid_ns(task);
 
-	if (droid_lkm_task_ipc_exit_defer(current))
+	if (droid_lkm_task_ipc_exit_defer(task))
 		droid_lkm_reaper_wake();
 
 	if (!droid_lkm_pidns_is_ours(ns))
-		return 0;
+		return;
 
-	droid_lkm_dbg("do_exit: %s[%d] ns=%p reaper=%d\n",
-	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), ns,
-	       droid_lkm_pidns_child_reaper(ns) == current);
+	droid_lkm_dbg("exit_ns: %s[%d] ns=%p reaper=%d\n",
+	       droid_lkm_task_comm(task), droid_lkm_task_pid(task), ns,
+	       droid_lkm_pidns_child_reaper(ns) == task);
 
-	if (droid_lkm_pidns_child_reaper(ns) != current)
-		return 0;
+	if (droid_lkm_pidns_child_reaper(ns) != task)
+		return;
 
 	droid_lkm_ks.disable_pid_allocation(ns);
 
@@ -727,11 +724,10 @@ static __nocfi noinline int droid_lkm_do_exit_pre(struct kprobe *p, struct pt_re
 		droid_lkm_pidns_set_child_reaper(ns, droid_lkm_reaper_task);
 
 	if (droid_lkm_pidns_reboot_value(ns))
-		droid_lkm_task_signal(current)->group_exit_code =
+		droid_lkm_task_signal(task)->group_exit_code =
 			droid_lkm_pidns_reboot_value(ns);
 
 	droid_lkm_pidns_queue_zap(ns);
-	return 0;
 }
 
 #ifdef DROID_LKM_NATIVE_PID
@@ -755,18 +751,15 @@ static int droid_lkm_pidns_init_native(void)
 		droid_native_pidns_exit();
 		return ret;
 	}
-	if (droid_lkm_skip_do_exit)
-		goto out_native;
-	droid_lkm_kp_do_exit.symbol_name = "do_exit";
-	droid_lkm_kp_do_exit.pre_handler = droid_lkm_do_exit_pre;
-	if (register_kprobe(&droid_lkm_kp_do_exit)) {
-		droid_lkm_err("cannot register do_exit kprobe\n");
-		kthread_stop(droid_lkm_reaper_task);
-		droid_lkm_reaper_task = NULL;
-		droid_native_pidns_exit();
-		return -ENODATA;
+	if (droid_lkm_nsproxy_enable) {
+		ret = droid_native_nsproxy_init();
+		if (ret) {
+			kthread_stop(droid_lkm_reaper_task);
+			droid_lkm_reaper_task = NULL;
+			droid_native_pidns_exit();
+			return ret;
+		}
 	}
-out_native:
 	droid_lkm_info("pidns native ready (reaper=%d)\n",
 		droid_lkm_task_pid(droid_lkm_reaper_task));
 	return 0;
@@ -807,23 +800,6 @@ static int droid_lkm_pidns_init_main(void)
 		return ret;
 	}
 
-	if (droid_lkm_skip_do_exit) {
-		droid_lkm_warn("skip_do_exit=1: no do_exit kprobe (diagnostic only!)\n");
-		goto out_main;
-	}
-
-	droid_lkm_kp_do_exit.symbol_name = "do_exit";
-	droid_lkm_kp_do_exit.pre_handler = droid_lkm_do_exit_pre;
-	if (register_kprobe(&droid_lkm_kp_do_exit)) {
-		droid_lkm_err("cannot register do_exit kprobe\n");
-		kthread_stop(droid_lkm_reaper_task);
-		droid_lkm_reaper_task = NULL;
-		kmem_cache_destroy(droid_lkm_pidns_cachep);
-		droid_lkm_pidns_cachep = NULL;
-		return -ENODATA;
-	}
-
-out_main:
 	droid_lkm_info("pidns ready (reaper=%d)\n",
 			 droid_lkm_task_pid(droid_lkm_reaper_task));
 	return 0;
@@ -838,6 +814,11 @@ int droid_lkm_pidns_init(void)
 	else {
 		droid_lkm_err("pid_impl must be main or native\n");
 		return -EINVAL;
+	}
+
+	if (droid_lkm_nsproxy_enable && !droid_lkm_pid_use_native) {
+		droid_lkm_err("nsproxy=1 requires pid_impl=native\n");
+		return -EOPNOTSUPP;
 	}
 
 #ifndef DROID_LKM_NATIVE_PID
@@ -897,7 +878,10 @@ __nocfi noinline void droid_lkm_pidns_exit(void)
 		return;
 #endif
 
-	unregister_kprobe(&droid_lkm_kp_do_exit);
+#ifdef DROID_LKM_NATIVE_PID
+	if (droid_lkm_pidns_nsproxy_enabled())
+		droid_native_nsproxy_exit();
+#endif
 
 	droid_lkm_pidns_retire_reapers();
 

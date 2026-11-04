@@ -25,6 +25,12 @@ typedef u64 droid_native_ns_flags_t;
 typedef unsigned long droid_native_ns_flags_t;
 #endif
 
+bool droid_native_pidns_runtime_supported(void);
+struct pid_namespace *droid_native_real_copy_pid_ns(
+	droid_native_ns_flags_t flags, struct user_namespace *user_ns,
+	struct pid_namespace *old_ns);
+void droid_native_real_put_pid_ns(struct pid_namespace *ns);
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)
 #define DROID_NATIVE_PIDNS_TYPE .type = CLONE_NEWPID,
 #else

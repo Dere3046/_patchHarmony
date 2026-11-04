@@ -3,7 +3,6 @@
  * Copyright (C) 2026 Dere3046
  */
 
-#include <linux/idr.h>
 #include <linux/pid_namespace.h>
 #include <linux/rcupdate.h>
 #include <linux/user_namespace.h>
@@ -24,8 +23,6 @@ void droid_native_pid_namespace_destroy(struct pid_namespace *ns)
 {
 	droid_native_pidns_tree_remove(ns);
 	droid_native_pidns_sysctl_unregister(ns);
-	droid_native_pidns_common_free(ns);
-	idr_destroy(&ns->idr);
 	call_rcu(&ns->rcu, droid_native_pid_namespace_release);
 }
 
