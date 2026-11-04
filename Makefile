@@ -115,6 +115,18 @@ MUNMAP_UNIT := $(shell if grep -qE ' [tT] do_vmi_munmap$$' $(KDIR)/System.map 2>
 	elif grep -qE ' [tT] do_mas_munmap$$' $(KDIR)/System.map 2>/dev/null; then echo src/main/ipcns/munmap_mas.o; \
 	else echo src/main/ipcns/munmap_legacy.o; fi)
 
+NATIVE_PID_OBJ :=
+ifeq ($(DROID_LKM_PID_BOTH),1)
+ccflags-y += -DDROID_LKM_NATIVE_PID -DDROID_LKM_PID_BOTH
+ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o src/native/shim.o
+endif
+ifeq ($(DROID_LKM_NATIVE_PID),1)
+ccflags-y += -DDROID_LKM_NATIVE_PID
+ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o src/native/shim.o
+endif
+
 droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \
 	src/hook/ds_hook.o src/compat/ds_compat.o \
 	src/compat/ds_layout_anchor.o \
@@ -127,6 +139,7 @@ droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \
 	src/main/pidns/ds_nsops.o \
 	src/main/pidns/ds_proc.o \
 	src/main/pidns/ds_status.o \
+	$(NATIVE_PID_OBJ) \
 	src/main/ipcns/ipcns.o \
 	src/main/ipcns/ksym_shim.o \
 	src/main/ipcns/ipc_shim.o \
