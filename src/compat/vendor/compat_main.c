@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #include <linux/module.h>
@@ -45,7 +45,7 @@ static int __init droid_lkm_vendor_init(void)
 	// a silent miss leaves vendor callers with NULL
 	ret = dlc_ghost_init();
 
-	/* vendor ddl history bounds, data only */
+	/* vendor ddl history bounds */
 	(void)dlc_ddl_hit_init();
 	if (ret) {
 		pr_err("[droid_lkm_vendor] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",

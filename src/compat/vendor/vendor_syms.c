@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #include <linux/kernel.h>
@@ -14,9 +14,6 @@ struct dlc_vendor_syms dlc_vendor_syms;
 static struct ds_compat_sym dlc_vendor_table[] = {
 	{ "init_task", (void **)&dlc_vendor_syms.init_task },
 	{ "__module_address", (void **)&dlc_vendor_syms.module_address },
-	{ "kern_path", (void **)&dlc_vendor_syms.kern_path },
-	{ "path_put", (void **)&dlc_vendor_syms.path_put },
-	{ "pid_max", (void **)&dlc_vendor_syms.pid_max },
 	{ "ddl_sdata", (void **)&dlc_vendor_syms.ddl_sdata },
 	{ "update_ddl_hit_history", (void **)&dlc_vendor_syms.ddl_update },
 	{ "find_task_by_pid_ns", (void **)&dlc_vendor_syms.find_task_by_pid_ns },

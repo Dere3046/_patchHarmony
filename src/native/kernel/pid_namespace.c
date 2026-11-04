@@ -27,6 +27,7 @@
 #include <linux/idr.h>
 #include <uapi/linux/wait.h>
 #include "native_compat.h"
+#include "compat/pid_namespace.h"
 
 extern rwlock_t *droid_lkm_ks_tasklist_lock;
 int droid_native_ns_alloc_inum(struct ns_common *ns);
@@ -39,9 +40,7 @@ long droid_native_kernel_wait4(pid_t upid, int __user *stat_addr, int options,
 void droid_native_do_exit(long code);
 struct ucounts *droid_native_inc_ucount(struct user_namespace *ns, kuid_t uid,
 				       enum ucount_type type);
-void droid_native_dec_ucount(struct ucounts *ucounts, enum ucount_type type);
 struct user_namespace *droid_native_get_user_ns(struct user_namespace *ns);
-void droid_native_put_user_ns(struct user_namespace *ns);
 
 static DEFINE_MUTEX(pid_caches_mutex);
 static struct kmem_cache *pid_ns_cachep;
@@ -125,7 +124,7 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 
 	droid_native_pidns_ref_init(ns);
 	ns->level = level;
-	ns->parent = get_pid_ns(parent_pid_ns);
+	ns->parent = droid_native_pid_namespace_get(parent_pid_ns);
 	ns->user_ns = droid_native_get_user_ns(user_ns);
 	ns->ucounts = ucounts;
 	ns->pid_allocated = PIDNS_ADDING;
@@ -159,31 +158,12 @@ out:
 	return ERR_PTR(err);
 }
 
-static void delayed_free_pidns(struct rcu_head *p)
-{
-	struct pid_namespace *ns = container_of(p, struct pid_namespace, rcu);
-
-	dec_pid_namespaces(ns->ucounts);
-	droid_native_put_user_ns(ns->user_ns);
-	kmem_cache_free(pid_ns_cachep, ns);
-}
-
-static void destroy_pid_namespace(struct pid_namespace *ns)
-{
-	droid_native_pidns_tree_remove(ns);
-	droid_native_pidns_sysctl_unregister(ns);
-	droid_native_pidns_common_free(ns);
-
-	idr_destroy(&ns->idr);
-	call_rcu(&ns->rcu, delayed_free_pidns);
-}
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
 void droid_native_pidns_destroy_work(struct work_struct *work)
 {
 	struct pid_namespace *ns = container_of(work, struct pid_namespace, work);
 
-	destroy_pid_namespace(ns);
+	droid_native_pid_namespace_destroy(ns);
 }
 #endif
 
@@ -191,7 +171,7 @@ struct pid_namespace *copy_pid_ns(droid_native_ns_flags_t flags,
 	struct user_namespace *user_ns, struct pid_namespace *old_ns)
 {
 	if (!(flags & CLONE_NEWPID))
-		return get_pid_ns(old_ns);
+		return droid_native_pid_namespace_get(old_ns);
 	if (task_active_pid_ns(current) != old_ns)
 		return ERR_PTR(-EINVAL);
 	return create_pid_namespace(user_ns, old_ns);
@@ -202,23 +182,24 @@ void droid_native_pidns_kref_release(struct kref *kref)
 {
 	struct pid_namespace *ns = container_of(kref, struct pid_namespace, kref);
 
-	destroy_pid_namespace(ns);
+	droid_native_pid_namespace_destroy(ns);
 }
 #endif
 
 void put_pid_ns(struct pid_namespace *ns)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
-	if (ns && ns != &init_pid_ns && droid_native_pidns_ref_put(ns))
+	if (ns && ns != &init_pid_ns &&
+	    droid_native_pid_namespace_put_ref(ns))
 		schedule_work(&ns->work);
 #else
 	struct pid_namespace *parent;
 
 	while (ns != &init_pid_ns) {
 		parent = ns->parent;
-		if (!droid_native_pidns_ref_put(ns))
+		if (!droid_native_pid_namespace_put_ref(ns))
 			break;
-		destroy_pid_namespace(ns);
+		droid_native_pid_namespace_destroy(ns);
 		ns = parent;
 	}
 #endif
@@ -388,7 +369,7 @@ static struct ns_common *pidns_get(struct task_struct *task)
 	rcu_read_lock();
 	ns = task_active_pid_ns(task);
 	if (ns)
-		get_pid_ns(ns);
+		droid_native_pid_namespace_get(ns);
 	rcu_read_unlock();
 
 	return ns ? &ns->ns : NULL;
@@ -401,7 +382,7 @@ static struct ns_common *pidns_for_children_get(struct task_struct *task)
 	task_lock(task);
 	if (task->nsproxy) {
 		ns = task->nsproxy->pid_ns_for_children;
-		get_pid_ns(ns);
+		droid_native_pid_namespace_get(ns);
 	}
 	task_unlock(task);
 
@@ -450,7 +431,7 @@ static int pidns_install(struct nsset *nsset, struct ns_common *ns)
 		return -EINVAL;
 
 	put_pid_ns(nsproxy->pid_ns_for_children);
-	nsproxy->pid_ns_for_children = get_pid_ns(new);
+	nsproxy->pid_ns_for_children = droid_native_pid_namespace_get(new);
 	return 0;
 }
 
@@ -469,7 +450,7 @@ static struct ns_common *pidns_get_parent(struct ns_common *ns)
 		p = p->parent;
 	}
 
-	return &get_pid_ns(pid_ns)->ns;
+	return &droid_native_pid_namespace_get(pid_ns)->ns;
 }
 
 static struct user_namespace *pidns_owner(struct ns_common *ns)
@@ -532,5 +513,5 @@ struct pid_namespace *droid_native_create_pid_namespace(
 
 struct pid_namespace *droid_native_get_pid_ns(struct pid_namespace *ns)
 {
-	return get_pid_ns(ns);
+	return droid_native_pid_namespace_get(ns);
 }

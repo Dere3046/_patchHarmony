@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 #ifndef DROID_LKM_NATIVE_COMPAT_H
 #define DROID_LKM_NATIVE_COMPAT_H
@@ -11,10 +11,13 @@
 #include <linux/pid_namespace.h>
 #include <linux/ns_common.h>
 #include <linux/proc_ns.h>
+#include <linux/user_namespace.h>
 
 extern const struct proc_ns_operations droid_native_pidns_operations;
 int droid_native_ns_alloc_inum(struct ns_common *ns);
 void droid_native_ns_free_inum(struct ns_common *ns);
+void droid_native_dec_ucount(struct ucounts *ucounts, enum ucount_type type);
+void droid_native_put_user_ns(struct user_namespace *ns);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 18, 0)
 typedef u64 droid_native_ns_flags_t;
@@ -37,6 +40,11 @@ static inline void droid_native_pidns_ref_init(struct pid_namespace *ns)
 	kref_init(&ns->kref);
 }
 
+static inline void droid_native_pidns_ref_get(struct pid_namespace *ns)
+{
+	kref_get(&ns->kref);
+}
+
 static inline bool droid_native_pidns_ref_put(struct pid_namespace *ns)
 {
 	return kref_put(&ns->kref, droid_native_pidns_kref_release);
@@ -49,6 +57,11 @@ static inline void droid_native_pidns_ref_init(struct pid_namespace *ns)
 	refcount_set(&ns->ns.count, 1);
 }
 
+static inline void droid_native_pidns_ref_get(struct pid_namespace *ns)
+{
+	refcount_inc(&ns->ns.count);
+}
+
 static inline bool droid_native_pidns_ref_put(struct pid_namespace *ns)
 {
 	return refcount_dec_and_test(&ns->ns.count);
@@ -59,6 +72,11 @@ static inline bool droid_native_pidns_ref_put(struct pid_namespace *ns)
 static inline void droid_native_pidns_ref_init(struct pid_namespace *ns)
 {
 	refcount_set(&ns->ns.__ns_ref, 1);
+}
+
+static inline void droid_native_pidns_ref_get(struct pid_namespace *ns)
+{
+	(void)ns_ref_get(ns);
 }
 
 static inline bool droid_native_pidns_ref_put(struct pid_namespace *ns)

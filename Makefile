@@ -119,12 +119,16 @@ NATIVE_PID_OBJ :=
 ifeq ($(DROID_LKM_PID_BOTH),1)
 ccflags-y += -DDROID_LKM_NATIVE_PID -DDROID_LKM_PID_BOTH
 ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
-NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o src/native/shim.o
+ccflags-y += -I$(src)/src/native/compat
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
+	src/native/compat/pid_namespace.o src/native/shim.o
 endif
 ifeq ($(DROID_LKM_NATIVE_PID),1)
 ccflags-y += -DDROID_LKM_NATIVE_PID
 ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
-NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o src/native/shim.o
+ccflags-y += -I$(src)/src/native/compat
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
+	src/native/compat/pid_namespace.o src/native/shim.o
 endif
 
 droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \

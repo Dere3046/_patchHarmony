@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #include <linux/module.h>
@@ -278,8 +278,15 @@ int droid_lkm_status_init(void)
 		droid_lkm_status_can_insert = !droid_lkm_status_append;
 	}
 
-	ret = ds_hook_install(&droid_lkm_status_hook, "proc_pid_status",
-			      "droid_lkm_status_wrap");
+	ret = ds_hook_install_text(&droid_lkm_status_hook, "proc_pid_status",
+				   "droid_lkm_status_wrap");
+	if (ret) {
+		droid_lkm_warn("NSpid emulation: proc_pid_status text route refused (%d), trying kprobe\n",
+			       ret);
+		ret = ds_hook_install_kprobe(&droid_lkm_status_hook,
+					     "proc_pid_status",
+					     "droid_lkm_status_wrap");
+	}
 	if (ret) {
 		droid_lkm_warn("NSpid emulation skipped, proc_pid_status hook failed (%d)\n",
 			       ret);
