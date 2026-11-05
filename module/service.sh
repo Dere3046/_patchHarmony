@@ -28,7 +28,8 @@ conf() {
 install() {
     local m ko out rc
     for m in $(conf modules); do
-        ko=$MODDIR/ko/$m.ko
+        set -- "$MODDIR"/bin/*/"$m".ko
+        ko=$1
         [ -f "$ko" ] || {
             log "missing $m.ko"
             return 1

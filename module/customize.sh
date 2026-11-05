@@ -22,41 +22,37 @@ detect_kmi() {
     [ -n "$ver" ] && [ -n "$tag" ] && echo "$tag-$ver"
 }
 
-unpack() {
+unpack_static() {
     unzip -o "$ZIPFILE" module.prop config.conf service.sh uninstall.sh \
         -d "$MODPATH" >&2 || abort "! unpack failed"
 }
 
-unpack_one() {
-    mkdir -p "$MODPATH/ko"
-    unzip -o "$ZIPFILE" "kernels/$1/*.ko" -d "$MODPATH" >&2 || abort "! unpack $1 failed"
-    [ -d "$MODPATH/kernels/$1" ] || abort "! no build for $1"
-    mv -f "$MODPATH"/kernels/"$1"/*.ko "$MODPATH"/ko/ || abort "! move $1 failed"
-    rm -rf "$MODPATH/kernels"
+unpack_build() {
+    mkdir -p "$MODPATH/bin"
+    unzip -o "$ZIPFILE" "bin/$1/*" -d "$MODPATH" >&2 || abort "! unpack $1 failed"
+    [ -d "$MODPATH/bin/$1" ] || abort "! no build for $1"
 }
 
 chmod_module() {
-    chmod 0755 "$MODPATH" "$MODPATH/ko" "$MODPATH"/*.sh
+    chmod 0755 "$MODPATH" "$MODPATH/bin" "$MODPATH"/*.sh
     chmod 0644 "$MODPATH"/module.prop "$MODPATH"/config.conf
-    find "$MODPATH"/ko -name '*.ko' -exec chmod 0644 {} \;
+    find "$MODPATH"/bin -name '*.ko' -exec chmod 0644 {} \;
 }
 
 main() {
     local kmi
     require_arm64
-    unpack
+    unpack_static
 
     kmi=$(detect_kmi)
     [ -n "$kmi" ] || abort "! cannot detect KMI from $(uname -r)"
-
-    unpack_one "$kmi"
+    unpack_build "$kmi"
 
     mkdir -p "$DATA"
     rm -f "$DATA/blocked" "$DATA/insmod"
 
     chmod_module
-    ui_print "- kmi    : $kmi"
-    ui_print "- payload: $(ls "$MODPATH/ko" | tr '\n' ' ')"
+    ui_print "- payload: $(ls "$MODPATH/bin/$kmi" | tr '\n' ' ')"
 }
 
 main

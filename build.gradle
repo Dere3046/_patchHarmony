@@ -41,7 +41,7 @@ tasks.register('stageModule', Sync) {
     kmis.each { k ->
         from(outDir.dir(k)) {
             include '*.ko'
-            into "kernels/${k}"
+            into "bin/${k}"
         }
     }
     dirPermissions { unix('0755') }
