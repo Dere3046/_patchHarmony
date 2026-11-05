@@ -198,12 +198,16 @@ ccflags-y += -DDROID_LKM_LAYOUT_TEST_BUILD_SHIFT=$(DROID_LKM_LAYOUT_TEST_BUILD_S
 endif
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
 
+.PHONY: all clean module
 all:
 	@mkdir -p $(sort $(dir $(addprefix $(ODIR)/,$(droid_lkm-y) $(droid_lkm_vendor-y) $(droid_lkm_misc-y))))
 	# 6.18 kbuild derives src from srcroot, older kernels ignore it
 	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) modules
 clean:
 	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) clean
+
+module:
+	gradle -q packageModule
 
 $(obj)/%.o: $(src)/%.c $(recordmcount_source) FORCE
 	$(call if_changed_rule,cc_o_c)

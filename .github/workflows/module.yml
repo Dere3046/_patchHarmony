@@ -61,6 +61,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
       - uses: actions/download-artifact@v4
         with:
           path: art
@@ -82,18 +91,21 @@ jobs:
 
       - name: Package
         run: |
-          chmod +x scripts/*.sh
-          sh scripts/package-module.sh
-          ls -lh dist
+          args=""
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            args="-Pversion=$GITHUB_REF_NAME"
+          fi
+          gradle --no-daemon packageModule $args
+          ls -lh build/dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: phDroid-module
-          path: dist/*.zip
+          path: build/dist/*.zip
           if-no-files-found: error
 
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/*.zip
+          files: build/dist/*.zip
           generate_release_notes: true

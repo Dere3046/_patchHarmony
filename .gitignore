@@ -12,4 +12,6 @@ modules.order
 test/
 dist/
 build/
-node_modules/
+.gradle/
+local.properties
+*.hprof
