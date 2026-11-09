@@ -3,6 +3,11 @@
  * nsfs side of the fake user namespace: the /proc/<pid>/ns/user entry, with a
  * placeholder for tasks that stay in the initial namespace. The kind is
  * registered with the main module, which owns the ns directory lookup.
+ *
+ * The two registration entry points are exported symbols rather than names
+ * resolved at runtime, so the loader records the dependency and droid_lkm cannot
+ * leave while this module is loaded -- the registration outlives any reference
+ * count this module could keep on its own.
  */
 
 #include <linux/slab.h>
@@ -23,33 +28,6 @@
 
 static struct ns_common *droid_lkm_userns_host_placeholder;
 static struct proc_ns_operations *droid_lkm_userns_host_ops;
-
-/*
- * the module the ns kind is registered with, held for as long as the registration is.
- * the two entry points are reached through an address resolved by name, not through an
- * import, so the loader records no dependency and nothing stops droid_lkm from being
- * unloaded first, which would leave ns_kind_unregister() pointing into freed text
- */
-static struct module *droid_lkm_userns_kind_owner;
-
-static void droid_lkm_userns_kind_hold(void)
-{
-	struct module *mod;
-
-	if (!droid_lkm_misc_ks.module_address || !droid_lkm_misc_ks.ns_kind_register)
-		return;
-
-	/* the same idiom the module loader uses: the pointer is only stable with preempt off */
-	preempt_disable();
-	mod = droid_lkm_misc_ks.module_address(
-		(unsigned long)droid_lkm_misc_ks.ns_kind_register);
-	if (mod && !try_module_get(mod))
-		mod = NULL;
-	preempt_enable();
-
-	if (mod)
-		droid_lkm_userns_kind_owner = mod;
-}
 
 static struct ns_common *droid_lkm_userns_nsops_get(struct task_struct *task)
 {
@@ -239,16 +217,9 @@ int droid_lkm_userns_nsops_init(void)
 	refcount_set(droid_lkm_userns_ns_ref(ns), 1);
 	droid_lkm_userns_host_placeholder = ns;
 
-	if (!droid_lkm_misc_ks.ns_kind_register) {
-		ret = -ENODEV;
-		goto err_free;
-	}
-
-	ret = droid_lkm_misc_ks.ns_kind_register(&droid_lkm_userns_kind);
+	ret = droid_lkm_ns_kind_register(&droid_lkm_userns_kind);
 	if (ret)
 		goto err_free;
-
-	droid_lkm_userns_kind_hold();
 
 	/*
 	 * the registration is the point past which this module cannot be unloaded: from here
@@ -270,14 +241,7 @@ err_free:
 
 void droid_lkm_userns_nsops_exit(void)
 {
-	/* the provider reference goes last, after the last call into it */
-	if (droid_lkm_misc_ks.ns_kind_unregister)
-		droid_lkm_misc_ks.ns_kind_unregister(&droid_lkm_userns_kind);
-
-	if (droid_lkm_userns_kind_owner) {
-		module_put(droid_lkm_userns_kind_owner);
-		droid_lkm_userns_kind_owner = NULL;
-	}
+	droid_lkm_ns_kind_unregister(&droid_lkm_userns_kind);
 
 	droid_lkm_userns_release_resident();
 

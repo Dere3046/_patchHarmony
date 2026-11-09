@@ -29,7 +29,6 @@ struct user_namespace;
 struct nsproxy;
 struct fs_struct;
 struct task_struct;
-struct droid_lkm_ns_kind_reg;
 
 /*
  * CONFIG_TRIM_UNUSED_KSYMS and the vendor abi_symbollist mean an exported symbol is not
@@ -60,16 +59,6 @@ struct droid_lkm_misc_ksym {
 	typeof(&prepare_creds)		prepare_creds;
 	typeof(&commit_creds)		commit_creds;
 	typeof(&key_put)		key_put;
-
-	/* optional main module entry points, exported by droid_lkm.ko itself */
-	int (*ns_kind_register)(const struct droid_lkm_ns_kind_reg *kind);
-	void (*ns_kind_unregister)(const struct droid_lkm_ns_kind_reg *kind);
-
-	/*
-	 * the module those two live in. reached by address rather than imported, so the
-	 * loader knows nothing about the dependency and the reference has to be taken here
-	 */
-	typeof(&__module_address)	module_address;
 
 	/* the single capability decision function, resolved for the trace only */
 	int (*cap_capable)(const struct cred *cred, struct user_namespace *targ_ns,
