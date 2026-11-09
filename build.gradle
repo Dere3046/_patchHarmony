@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (C) 2026 dere3046
+ */
+
+plugins {
+    id 'base'
+}
+
+def moduleDir = layout.projectDirectory.dir('module')
+def outDir = layout.projectDirectory.dir('out')
+
+def prop = new Properties()
+file('module/module.prop').withInputStream { prop.load(it) }
+
+if (project.version == Project.DEFAULT_VERSION) {
+    project.version = prop.getProperty('version')
+}
+def modVersion = project.version
+def modCode = project.findProperty('code') ?: prop.getProperty('versionCode')
+
+def kmis = (project.findProperty('kmis') ?: '').trim().split(/[\s,]+/).findAll { it }
+if (!kmis) {
+    kmis = (outDir.asFile.listFiles() ?: [])
+        .findAll { new File(it, 'droid_lkm.ko').isFile() }
+        .collect { it.name }
+        .sort()
+}
+
+tasks.register('stageModule', Sync) {
+    into layout.buildDirectory.dir('module')
+    from('LICENSE')
+    from(moduleDir) {
+        filesMatching('module.prop') {
+            filter { line ->
+                line.replaceAll(/^version=.*/, "version=${modVersion}")
+                    .replaceAll(/^versionCode=.*/, "versionCode=${modCode}")
+            }
+        }
+    }
+    kmis.each { k ->
+        from(outDir.dir(k)) {
+            include '*.ko'
+            into "bin/${k}"
+        }
+    }
+    dirPermissions { unix('0755') }
+    filePermissions { unix('0644') }
+    eachFile { d ->
+        if (d.name.endsWith('.sh') || d.name == 'update-binary') {
+            d.permissions { unix('0755') }
+        }
+    }
+}
+
+tasks.register('packageModule', Zip) {
+    dependsOn 'stageModule'
+    from layout.buildDirectory.dir('module')
+    archiveFileName = "phDroid-${modVersion}.zip"
+    destinationDirectory = layout.buildDirectory.dir('dist')
+    preserveFileTimestamps = false
+    dirPermissions { unix('0755') }
+    filePermissions { unix('0644') }
+    eachFile { d ->
+        if (d.name.endsWith('.sh') || d.name == 'update-binary') {
+            d.permissions { unix('0755') }
+        }
+    }
+    doFirst {
+        if (!kmis) {
+            throw new GradleException('no droid_lkm.ko under out/')
+        }
+    }
+}

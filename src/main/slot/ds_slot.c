@@ -31,6 +31,10 @@
 #include "hk_patch.h"
 #include "ds_hook.h"
 
+#ifdef DROID_LKM_NATIVE_PID
+#include "compat/nsproxy.h"
+#endif
+
 /* 6.18 builds with -Wmissing-prototypes */
 struct droid_lkm_clone_ctx;
 __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags, struct droid_lkm_clone_ctx *ctx);
@@ -516,8 +520,10 @@ static int (*droid_lkm_check_unshare_flags_fn)(unsigned long flags);
  */
 static struct ds_hook droid_lkm_switch_hook;
 static struct ds_hook droid_lkm_exit_ns_hook;
+static struct ds_hook droid_lkm_free_nsproxy_hook;
 static void (*droid_lkm_switch_orig)(struct task_struct *p, struct nsproxy *new);
 static void (*droid_lkm_exit_ns_orig)(struct task_struct *p);
+static void (*droid_lkm_free_nsproxy_orig)(struct nsproxy *ns);
 
 static void droid_lkm_nsproxy_hold(struct nsproxy *nsp)
 {
@@ -526,6 +532,13 @@ static void droid_lkm_nsproxy_hold(struct nsproxy *nsp)
 		return;
 	droid_lkm_nsproxy_set_ipc_ns(nsp,
 		droid_lkm_ipcns_get(droid_lkm_nsproxy_ipc_ns(nsp)));
+}
+
+static struct nsproxy *droid_lkm_nsproxy_finish(struct nsproxy *nsp, bool hold)
+{
+	if (!IS_ERR_OR_NULL(nsp) && hold)
+		droid_lkm_nsproxy_hold(nsp);
+	return nsp;
 }
 
 static void droid_lkm_nsproxy_drop(struct ipc_namespace *ipc)
@@ -577,11 +590,34 @@ DROID_LKM_ENTRY __nocfi noinline void droid_lkm_exit_ns_wrap(struct task_struct 
 
 	if (last)
 		ipc = droid_lkm_nsproxy_ipc_ns(old);
+	droid_lkm_pidns_exit_cleanup(p);
 	droid_lkm_exit_ns_orig(p);
 	ds_hook_leave(&droid_lkm_exit_ns_hook);
 	if (last)
 		droid_lkm_nsproxy_drop(ipc);
 }
+
+DROID_LKM_ENTRY __nocfi noinline void droid_lkm_free_nsproxy_wrap(struct nsproxy *ns)
+{
+#ifdef DROID_LKM_NATIVE_PID
+	if (droid_lkm_pidns_nsproxy_enabled()) {
+		droid_native_nsproxy_defer_free(ns);
+		ds_hook_leave(&droid_lkm_free_nsproxy_hook);
+		return;
+	}
+#endif
+	droid_lkm_free_nsproxy_orig(ns);
+	ds_hook_leave(&droid_lkm_free_nsproxy_hook);
+}
+
+#ifdef DROID_LKM_NATIVE_PID
+static void droid_lkm_free_nsproxy_call(struct nsproxy *ns)
+{
+	ds_hook_enter(&droid_lkm_free_nsproxy_hook);
+	droid_lkm_free_nsproxy_orig(ns);
+	ds_hook_leave(&droid_lkm_free_nsproxy_hook);
+}
+#endif
 
 /* our own code switches nsproxy too, and has to release what the hook would */
 static void droid_lkm_nsproxy_switch(struct task_struct *p, struct nsproxy *new)
@@ -617,6 +653,22 @@ static int droid_lkm_nsproxy_release_hooks_install(void)
 	}
 	droid_lkm_exit_ns_orig =
 		(typeof(droid_lkm_exit_ns_orig))droid_lkm_exit_ns_hook.orig;
+
+	if (droid_lkm_pidns_nsproxy_enabled()) {
+		ret = ds_hook_install(&droid_lkm_free_nsproxy_hook, "free_nsproxy",
+				      "droid_lkm_free_nsproxy_wrap");
+		if (ret) {
+			ds_hook_remove(&droid_lkm_exit_ns_hook);
+			ds_hook_remove(&droid_lkm_switch_hook);
+			droid_lkm_switch_orig = NULL;
+			return ret;
+		}
+		droid_lkm_free_nsproxy_orig =
+			(typeof(droid_lkm_free_nsproxy_orig))droid_lkm_free_nsproxy_hook.orig;
+#ifdef DROID_LKM_NATIVE_PID
+		droid_native_nsproxy_set_free(droid_lkm_free_nsproxy_call);
+#endif
+	}
 	return 0;
 }
 
@@ -642,21 +694,13 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 	struct ipc_namespace *new_ipc = NULL;
 	struct nsproxy *nsp;
 
-	if (!want_pid && !want_ipc) {
-		struct nsproxy *nsp = droid_lkm_cnn_call(flags, tsk, user_ns, fs);
+	if (!want_pid && !want_ipc)
+		return droid_lkm_nsproxy_finish(
+			droid_lkm_cnn_call(flags, tsk, user_ns, fs), true);
 
-		if (!IS_ERR(nsp))
-			droid_lkm_nsproxy_hold(nsp);
-		return nsp;
-	}
-
-	if (!droid_lkm_gate_allow()) {
-		struct nsproxy *nsp = droid_lkm_cnn_call(flags, tsk, user_ns, fs);
-
-		if (!IS_ERR(nsp))
-			droid_lkm_nsproxy_hold(nsp);
-		return nsp;
-	}
+	if (!droid_lkm_gate_allow())
+		return droid_lkm_nsproxy_finish(
+			droid_lkm_cnn_call(flags, tsk, user_ns, fs), true);
 
 	if (want_pid) {
 		struct pid_namespace *old;
@@ -705,12 +749,10 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 		droid_lkm_nsproxy_set_pid_ns_for_children(nsp, new_pid);
 	if (want_ipc)
 		droid_lkm_nsproxy_set_ipc_ns(nsp, new_ipc);
-	else
-		droid_lkm_nsproxy_hold(nsp);
 
 	droid_lkm_dbg("nsproxy: flags=0x%lx pid=%d ipc=%d -> %p\n", flags,
 	       (int)want_pid, (int)want_ipc, nsp);
-	return nsp;
+	return droid_lkm_nsproxy_finish(nsp, !want_ipc);
 }
 
 static int (*droid_lkm_cn_orig)(unsigned long flags, struct task_struct *tsk);
@@ -1257,8 +1299,10 @@ int droid_lkm_slot_init(void)
 		droid_lkm_info("text patch path unavailable, function hooks take the kprobe route\n");
 	droid_lkm_nsproxy_hook_install();
 	droid_lkm_copy_namespaces_hook_install();
-	if (droid_lkm_nsproxy_release_hooks_install())
-		droid_lkm_warn("nsproxy release hooks unavailable, namespaces stay until unload\n");
+	if (droid_lkm_nsproxy_release_hooks_install()) {
+		droid_lkm_err("nsproxy release hooks unavailable, refusing load\n");
+		return -ENODATA;
+	}
 	droid_lkm_clone_slot_install();
 
 	droid_lkm_info("syscall slots patched: unshare=%d reboot=%d\n", __NR_unshare,

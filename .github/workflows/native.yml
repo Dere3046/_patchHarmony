@@ -1,0 +1,68 @@
+name: Build native PID
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/native/**'
+      - 'src/main/pidns/**'
+      - 'Makefile'
+      - 'deps.lst'
+      - 'scripts/fetch-deps.sh'
+      - '.github/workflows/native.yml'
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kmi: android12-5.10
+            image: android12-5.10-20260313
+          - kmi: android13-5.10
+            image: android13-5.10-20260313
+          - kmi: android13-5.15
+            image: android13-5.15-20260313
+          - kmi: android14-5.15
+            image: android14-5.15-20260313
+          - kmi: android14-6.1
+            image: android14-6.1-20260313
+          - kmi: android15-6.6
+            image: android15-6.6-20260313
+          - kmi: android16-6.12
+            image: android16-6.12-20260313
+          - kmi: android17-6.18
+            image: android17-6.18-20260828
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.image }}
+      options: --privileged
+    env:
+      DROID_LKM_NATIVE_PID: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch deps
+        env:
+          KMSDK_TOKEN: ${{ secrets.KMSDK_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
+          scripts/fetch-deps.sh
+
+      - name: Build native ${{ matrix.kmi }}
+        run: |
+          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          tail -5 build.log
+
+      - name: Zero warning gate
+        run: |
+          if grep -nE "error:|warning:" build.log; then
+            echo "build log is not clean"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: droid_lkm-native-${{ matrix.kmi }}
+          path: out/${{ matrix.kmi }}/droid_lkm*.ko
+          if-no-files-found: error

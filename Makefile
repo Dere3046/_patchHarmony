@@ -17,7 +17,7 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
-#   oppo ddl history table
+#   oppo ddl history bounds
 # nothing in this ko is version specific: every symbol and struct offset it needs
 # is resolved at runtime through KallRecon and Type_info, so the only compile time
 # constraint is the target's own headers. build it on every branch this repo
@@ -33,8 +33,8 @@ DLC_VENDOR_OBJS := src/compat/vendor/compat_main.o src/compat/vendor/ghost.o \
 	src/hook/ds_hook.o
 droid_lkm_vendor-y := $(DLC_VENDOR_OBJS) $(DEPS_OBJS_ALL)
 
-# third ko in the same Kbuild: container scoped kernel features missing on stock GKI
-# (devtmpfs, fake userns, xt_addrtype). it starts at 5.15: 5.10 predates the
+# third ko in the same Kbuild: container scoped kernel features stock GKI leaves
+# out (devtmpfs, fake userns, xt_addrtype). it starts at 5.15: 5.10 predates the
 # ns_common refcount and the owner plumbing the user namespace work is built on,
 # so that branch stays off until it is ported
 MISC_OPT := $(strip $(if $(filter 5.15 6.1 6.6 6.12,$(VENDOR_VER)),m,))
@@ -64,6 +64,24 @@ MUNMAP_UNIT := $(shell if grep -qE ' [tT] do_vmi_munmap$$' $(KDIR)/System.map 2>
 	elif grep -qE ' [tT] do_mas_munmap$$' $(KDIR)/System.map 2>/dev/null; then echo src/main/ipcns/munmap_mas.o; \
 	else echo src/main/ipcns/munmap_legacy.o; fi)
 
+NATIVE_PID_OBJ :=
+ifeq ($(DROID_LKM_PID_BOTH),1)
+ccflags-y += -DDROID_LKM_NATIVE_PID -DDROID_LKM_PID_BOTH
+ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
+ccflags-y += -I$(src)/src/native/compat
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
+	src/native/compat/nsproxy.o src/native/compat/pid_namespace.o \
+	src/native/shim.o
+endif
+ifeq ($(DROID_LKM_NATIVE_PID),1)
+ccflags-y += -DDROID_LKM_NATIVE_PID
+ccflags-y += -I$(src)/src/native -I$(src)/src/native/kernel
+ccflags-y += -I$(src)/src/native/compat
+NATIVE_PID_OBJ := src/native/kernel/pid_namespace.o \
+	src/native/compat/nsproxy.o src/native/compat/pid_namespace.o \
+	src/native/shim.o
+endif
+
 droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \
 	src/hook/ds_hook.o src/compat/ds_compat.o \
 	src/compat/ds_layout_anchor.o \
@@ -76,6 +94,7 @@ droid_lkm-y := src/main/core/main.o src/main/core/ds_features.o \
 	src/main/pidns/ds_nsops.o \
 	src/main/pidns/ds_proc.o \
 	src/main/pidns/ds_status.o \
+	$(NATIVE_PID_OBJ) \
 	src/main/ipcns/ipcns.o \
 	src/main/ipcns/ksym_shim.o \
 	src/main/ipcns/ipc_shim.o \
@@ -105,7 +124,6 @@ ccflags-y += -I$(src)/src/main/ipcns/mqueue -I$(src)/src/main/ipcns/sysctl
 ccflags-y += -I$(src)/src/main/ipcns/compat
 ccflags-y += -I$(src)/src/misc -I$(src)/src/misc/xt -I$(src)/src/misc/userns
 ccflags-y += -I$(src)/src/misc/devtmpfs
-ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 
 # the target kernel's own tree, which the ddk lays out at $(KDIR)/source. a few
 # declarations this module needs are in headers the kernel never publishes, the
@@ -114,6 +132,7 @@ ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 # hashes the whole type, so a guess that drifts by one qualifier is a fatal cfi
 # failure on the device
 ccflags-y += -I$(KDIR)/source
+ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
 
 # 6.18 turns on -Wmissing-prototypes, and this module both defines kernel
 # names the newer kernel stops declaring and exposes entry points through
@@ -136,12 +155,16 @@ ccflags-y += -DDROID_LKM_LAYOUT_TEST_BUILD_SHIFT=$(DROID_LKM_LAYOUT_TEST_BUILD_S
 endif
 ccflags-y += -DCONFIG_KERNSC_PATCH -DCONFIG_KERNSC_DISCOVER
 
+.PHONY: all clean module
 all:
 	@mkdir -p $(sort $(dir $(addprefix $(ODIR)/,$(droid_lkm-y) $(droid_lkm_vendor-y) $(droid_lkm_misc-y))))
 	# 6.18 kbuild derives src from srcroot, older kernels ignore it
 	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) modules
 clean:
 	make -C $(KDIR) M=$(ODIR) src=$(MDIR) srcroot=$(MDIR) clean
+
+module:
+	gradle -q packageModule
 
 $(obj)/%.o: $(src)/%.c $(recordmcount_source) FORCE
 	$(call if_changed_rule,cc_o_c)

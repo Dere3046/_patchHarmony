@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #include <linux/kernel.h>
@@ -150,6 +150,61 @@ int ds_hook_install(struct ds_hook *h, const char *sym, const char *wrap)
 	ds_hook_track(h);
 	ds_hook_info("hook %s on the %s route (entry 0x%016lx orig 0x%016lx)\n",
 		     sym, ds_hook_route_name(h->route), h->addr, h->orig);
+	return 0;
+}
+
+int ds_hook_install_text(struct ds_hook *h, const char *sym, const char *wrap)
+{
+	struct hk_inline_probe probe;
+	int ret;
+
+	if (!h || !sym || !wrap)
+		return -EINVAL;
+	if (ds_hook_mode == DS_HOOK_KPROBE_ONLY)
+		return -EOPNOTSUPP;
+	memset(h, 0, sizeof(*h));
+	h->name = sym;
+
+	if (!hk_inline_probe(sym, &probe) &&
+	    probe.state != HK_INLINE_PLAIN) {
+		ds_hook_warn("hook %s: entry state %d (%s), text route refused\n",
+			     sym, probe.state, probe.reason ? probe.reason : "?");
+		return -EOPNOTSUPP;
+	}
+
+	ret = ds_hook_route_install(h, sym, wrap, DS_HOOK_TEXT);
+	if (ret) {
+		ds_hook_warn("hook %s: text route failed %d\n", sym, ret);
+		return ret;
+	}
+
+	ds_hook_track(h);
+	ds_hook_info("hook %s on the text route (entry 0x%016lx orig 0x%016lx)\n",
+		     sym, h->addr, h->orig);
+	return 0;
+}
+
+int ds_hook_install_kprobe(struct ds_hook *h, const char *sym,
+			   const char *wrap)
+{
+	int ret;
+
+	if (!h || !sym || !wrap)
+		return -EINVAL;
+	if (ds_hook_mode == DS_HOOK_TEXT_ONLY)
+		return -EOPNOTSUPP;
+	memset(h, 0, sizeof(*h));
+	h->name = sym;
+
+	ret = ds_hook_route_install(h, sym, wrap, DS_HOOK_KPROBE);
+	if (ret) {
+		ds_hook_warn("hook %s: kprobe route failed %d\n", sym, ret);
+		return ret;
+	}
+
+	ds_hook_track(h);
+	ds_hook_info("hook %s on the kprobe route (entry 0x%016lx orig 0x%016lx)\n",
+		     sym, h->addr, h->orig);
 	return 0;
 }
 

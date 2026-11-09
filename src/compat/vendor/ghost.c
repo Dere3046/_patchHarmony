@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #include <linux/module.h>
@@ -261,89 +261,6 @@ static int dlc_ghost_build(void)
 	return 0;
 }
 
-// vendor tables are PID_MAX_DEFAULT entries indexed by task->pid
-// 0 caps only when such a module is loaded
-// -1 never  N caps to N
-static int dlc_pid_max_cap;
-module_param_named(pid_max_cap, dlc_pid_max_cap, int, 0444);
-MODULE_PARM_DESC(pid_max_cap,
-	"0 caps pid_max only when a pid indexed vendor module is loaded, -1 never, N caps to N");
-
-static const char *const dlc_pid_indexed_modules[] = {
-	"oplus_bsp_sched_assist",
-	"oplus_bsp_task_sched",
-	"oplus_bsp_schedinfo",
-	"oplus_bsp_schedtune",
-	"oplus_bsp_sched_ext",
-	"oplus_bsp_uxmem_opt",
-};
-
-/* sysfs is the one place every branch agrees on, so ask it through kern_path */
-static bool dlc_module_loaded(const char *name)
-{
-	int (*kern_path_fn)(const char *, unsigned int, struct path *);
-	void (*path_put_fn)(const struct path *);
-	char path[64];
-	struct path p;
-
-	kern_path_fn = dlc_vendor_syms.kern_path;
-	path_put_fn = dlc_vendor_syms.path_put;
-	if (!kern_path_fn || !path_put_fn)
-		return false;
-
-	snprintf(path, sizeof(path), "/sys/module/%s", name);
-	if (kern_path_fn(path, 0, &p))
-		return false;
-	path_put_fn(&p);
-	return true;
-}
-
-static void dlc_ghost_audit_pid_max(void)
-{
-	int *pid_max_addr = dlc_vendor_syms.pid_max;
-	int value, cap = dlc_pid_max_cap;
-	int i;
-
-	if (!pid_max_addr || cap < 0)
-		return;
-
-	value = READ_ONCE(*pid_max_addr);
-
-	/* an explicit cap is enforced as given, whatever the default happens to be */
-	if (cap > 0) {
-		if (value <= cap)
-			return;
-		WRITE_ONCE(*pid_max_addr, cap);
-		pr_warn("[droid_lkm_vendor] pid_max %d -> %d by module parameter\n",
-			value, cap);
-		return;
-	}
-
-	if (value <= PID_MAX_DEFAULT)
-		return;
-
-	{
-		for (i = 0; i < ARRAY_SIZE(dlc_pid_indexed_modules); i++) {
-			if (dlc_module_loaded(dlc_pid_indexed_modules[i])) {
-				pr_warn("[droid_lkm_vendor] pid_max=%d with %s loaded: pid indexed arrays are sized for %d\n",
-					value, dlc_pid_indexed_modules[i],
-					PID_MAX_DEFAULT);
-				break;
-			}
-		}
-		if (i == ARRAY_SIZE(dlc_pid_indexed_modules))
-			return;
-		cap = PID_MAX_DEFAULT;
-	}
-
-	if (value <= cap)
-		return;
-
-	WRITE_ONCE(*pid_max_addr, cap);
-	pr_warn("[droid_lkm_vendor] pid_max %d -> %d, pids wrap inside the range vendor arrays cover\n",
-		value, cap);
-}
-
 static void dlc_ghost_prewarm(void)
 {
 	unsigned long sym_addr;
@@ -383,7 +300,6 @@ int dlc_ghost_init(void)
 		pr_err("[droid_lkm_vendor] ghost: init_task not found\n");
 		return ret;
 	}
-	dlc_ghost_audit_pid_max();
 
 	dlc_ghost_prewarm();
 

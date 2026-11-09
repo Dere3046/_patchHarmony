@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2026 dere3046
+ * Copyright (C) 2026 Dere3046
  */
 
 #ifndef DS_HOOK_H
@@ -41,6 +41,9 @@ const char *ds_hook_route_name(enum ds_hook_route route);
 
 /* a slot that refuses the write falls through to the function routes */
 int ds_hook_install(struct ds_hook *h, const char *sym, const char *wrap);
+int ds_hook_install_text(struct ds_hook *h, const char *sym, const char *wrap);
+int ds_hook_install_kprobe(struct ds_hook *h, const char *sym,
+			   const char *wrap);
 int ds_hook_install_slot(struct ds_hook *h, void **slot, const void *repl,
 			 const char *sym, const char *wrap);
 
