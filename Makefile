@@ -18,11 +18,10 @@ DEPS_OBJS_ALL := $(filter-out deps/HooKern/lib/hk_binder.o deps/HooKern/lib/hk_l
 # second ko in the same Kbuild: vendor compatibility fixups
 #   ghost task fallback for find_task_by_vpid
 #   oppo ddl history bounds
-# nothing in this ko is version specific: every symbol and struct offset it needs
-# is resolved at runtime through KallRecon and Type_info, so the only compile time
-# constraint is the target's own headers. build it on every branch this repo
-# targets and let the zero-warning build be the gate. 6.18 has no ddk image, so
-# it rides along unbuilt -- take it back out if it ever fails to compile there.
+# nothing in this ko is version specific: every symbol and struct offset it needs is
+# resolved at runtime through KallRecon and Type_info. build it on every branch this
+# repo targets and let the zero-warning build be the gate. 6.18 has no ddk image, so
+# it rides along unbuilt -- take it back out if it ever fails there
 VENDOR_VER := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
 	$(KDIR)/include/generated/utsrelease.h 2>/dev/null)
 VENDOR_OPT := $(strip $(if $(filter 5.10 5.15 6.1 6.6 6.12 6.18,$(VENDOR_VER)),m,))
@@ -44,6 +43,8 @@ DLM_OBJS := src/misc/misc_main.o \
 	src/misc/misc_layout.o \
 	src/misc/misc_scope.o \
 	src/misc/misc_proc.o \
+	src/compat/ds_compat.o \
+	src/compat/ds_layout_anchor.o \
 	src/misc/xt/xt_reg.o \
 	src/misc/xt/xt_addrtype.o \
 	src/misc/devtmpfs/devtmpfs.o \
@@ -124,15 +125,13 @@ ccflags-y += -I$(src)/src/main/ipcns/mqueue -I$(src)/src/main/ipcns/sysctl
 ccflags-y += -I$(src)/src/main/ipcns/compat
 ccflags-y += -I$(src)/src/misc -I$(src)/src/misc/xt -I$(src)/src/misc/userns
 ccflags-y += -I$(src)/src/misc/devtmpfs
-
-# the target kernel's own tree, which the ddk lays out at $(KDIR)/source. a few
-# declarations this module needs are in headers the kernel never publishes, the
-# driver core's drivers/base/base.h above all, and a function pointer's type has to
-# come from the kernel's declaration rather than a second guess at it: clang's cfi
-# hashes the whole type, so a guess that drifts by one qualifier is a fatal cfi
-# failure on the device
-ccflags-y += -I$(KDIR)/source
 ccflags-y += $(addprefix -I$(src)/,$(DEPS_INCS_ALL))
+
+# devtmpfs is the one file that reaches into the target kernel's own tree, for
+# drivers/base/base.h. scoped to it, so the other two ko's keep resolving headers
+# the way they always have. kbuild keys a per-file flag on the path relative to
+# $(obj), not on the basename, and every source here lives in a subdirectory
+CFLAGS_src/misc/devtmpfs/devtmpfs.o += -I$(KDIR)/source
 
 # 6.18 turns on -Wmissing-prototypes, and this module both defines kernel
 # names the newer kernel stops declaring and exposes entry points through

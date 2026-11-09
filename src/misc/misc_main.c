@@ -73,12 +73,14 @@ MODULE_PARM_DESC(release, "write 1 to drop the devtmpfs internal mount before un
 
 static int __init droid_lkm_misc_init(void)
 {
+	bool trusted;
 	int ret;
 
-	find_kallsyms_base();
-	if (!klnum_val || !kallrecon_klp) {
-		droid_lkm_misc_err("kallsyms recovery failed\n");
-		return -ENODATA;
+	/* the shared prefix check is what keeps a shim from resolving to itself */
+	ret = ds_compat_init("droid_lkm_misc", "droid_lkm_");
+	if (ret) {
+		droid_lkm_misc_err("kallsyms recovery failed: %d\n", ret);
+		return ret;
 	}
 
 	droid_lkm_misc_info("loaded\n");
@@ -97,7 +99,10 @@ static int __init droid_lkm_misc_init(void)
 	}
 	droid_lkm_misc_hk_up = true;
 
+	/* an offset this build cannot vouch for is not dereferenced: userns stays off */
 	droid_lkm_misc_layout_init();
+	trusted = droid_lkm_misc_layout_trusted();
+	droid_lkm_misc_layout_report();
 
 	ret = droid_lkm_misc_proc_init();
 	if (ret)
@@ -120,11 +125,14 @@ static int __init droid_lkm_misc_init(void)
 	}
 
 	if (droid_lkm_misc_userns_enable) {
-		ret = droid_lkm_userns_init();
-		if (ret)
-			droid_lkm_misc_warn("userns unavailable: %d\n", ret);
-		else
+		if (!trusted) {
+			droid_lkm_misc_report("userns", "off",
+					      "kernel layout not verified");
+		} else if (droid_lkm_userns_init()) {
+			droid_lkm_misc_warn("userns unavailable\n");
+		} else {
 			droid_lkm_misc_userns_up = true;
+		}
 	} else {
 		droid_lkm_misc_report("userns", "off", "userns=0");
 	}
