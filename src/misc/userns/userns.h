@@ -80,8 +80,8 @@ struct droid_lkm_userns *droid_lkm_userns_get(struct droid_lkm_userns *u);
 void droid_lkm_userns_put(struct droid_lkm_userns *u);
 
 /*
- * borrowed: the pointer is only valid while the caller holds rcu_read_lock(). every
- * caller that keeps it past that point wants droid_lkm_userns_get_of() instead
+ * borrowed, no reference: valid only while something else pins it, which for current is
+ * its own credential. any other task wants droid_lkm_userns_get_of() instead
  */
 struct droid_lkm_userns *droid_lkm_userns_of(struct task_struct *task);
 

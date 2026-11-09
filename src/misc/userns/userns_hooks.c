@@ -127,14 +127,18 @@ __nocfi noinline void droid_lkm_userns_putcred_wrap(struct cred *cred)
 	struct droid_lkm_userns *u;
 	typeof(droid_lkm_userns_putcred_orig) orig = DROID_LKM_USERNS_ORIG(putcred);
 
-	if (cred) {
-		u = droid_lkm_userns_from_ns(cred->user_ns);
-		if (u)
-			droid_lkm_userns_put(u);
-	}
+	/*
+	 * read the namespace off the credential before it is released, drop the reference
+	 * after: the namespace has to outlive the credential that names it, and orig() is
+	 * what frees that credential
+	 */
+	u = cred ? droid_lkm_userns_from_ns(cred->user_ns) : NULL;
 
 	if (orig)
 		orig(cred);
+
+	if (u)
+		droid_lkm_userns_put(u);
 }
 
 __nocfi noinline int droid_lkm_userns_seccap_wrap(const struct cred *cred,
