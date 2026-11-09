@@ -276,24 +276,14 @@ static void droid_lkm_userns_objects_detail(char *buf, size_t size)
 }
 
 /*
- * Why the module cannot be unloaded once the fake user namespace is offered.
- *
- * Everything this module owns a count for is already safe: a credential, a mount namespace
- * and an fs_context each hold a struct droid_lkm_userns reference, taken by the hooks that
- * install them and dropped by the hooks that replace them, because get_user_ns() and
- * put_user_ns() are stubs here and the kernel cannot hold one for us. That part needs no
- * pin, and an earlier version of this file pinned the module for the wrong reason.
- *
- * What no count reaches is the procfs inode. The main module's pid directory hook stores
- * this module's proc_ns_operations in a /proc/<pid>/ns/user inode and keeps it for as long
- * as the task lives, and this module's own id map files store their file_operations the
- * same way. Neither inode takes a reference, neither can be enumerated to be invalidated,
- * and the dentry cache outlives every namespace object that made them. So the reference is
- * taken where the first of them can be made, which is when the ns kind is registered, and
- * it is never given back while the module lives: from that point delete_module() answers
- * -EBUSY, and that is the whole unload story. devtmpfs and xt can be released through the
- * release parameter because what they leave behind is a mount and a registry entry that
- * they can take back; this cannot.
+ * why the module cannot be unloaded once the fake user namespace is offered. the counts
+ * this module owns are already safe: a credential, a mount namespace and an fs_context
+ * each hold a reference, because get_user_ns() and put_user_ns() are stubs here. what no
+ * count reaches is the procfs inode -- the pid directory hook and the id map files store
+ * this module's operations in inodes that take no reference, cannot be enumerated, and
+ * outlive the namespace objects behind them. so the reference is taken at ns kind
+ * registration and never given back: delete_module() answers -EBUSY from then on.
+ * devtmpfs and xt can still be released through the release parameter; this cannot
  */
 void droid_lkm_userns_stay_resident(const char *why)
 {
@@ -309,7 +299,7 @@ void droid_lkm_userns_stay_resident(const char *why)
 	droid_lkm_misc_info("userns resident: rmmod now fails with -EBUSY (%s)\n", why);
 }
 
-/* the other half, for a build that never registers the ns kind */
+/* the other half, so an init that fails after registration leaves nothing pinned */
 void droid_lkm_userns_release_resident(void)
 {
 	if (!droid_lkm_userns_resident)
@@ -402,14 +392,13 @@ unsigned int droid_lkm_userns_live(void)
 }
 
 /*
- * reached only by a build that never took the residency: droid_lkm_userns_nsops_init()
- * takes it the moment the ns kind is registered, and nothing gives it back, so on a
- * normal load delete_module() stops before this runs. keep it correct anyway, because
- * userns=0 and a kernel without the main module both get here
+ * the teardown is reachable only when init succeeded but the residency could not be taken,
+ * which is the try_module_get() failure in stay_resident(). nsops_init() takes it at ns
+ * kind registration and nothing gives it back, so a normal load has delete_module() stop
+ * before this runs
  *
- * the objects are not freed here. droid_lkm_userns_put() unlinks an object before it
- * schedules the work that frees it, so an object still on the list has a reference and a
- * free here would race droid_lkm_userns_free_work() over the same allocation
+ * the objects are not freed here: droid_lkm_userns_put() unlinks one before scheduling the
+ * work that frees it, so a free here would race droid_lkm_userns_free_work() over it
  */
 void droid_lkm_userns_exit(void)
 {

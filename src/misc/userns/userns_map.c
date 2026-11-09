@@ -99,7 +99,7 @@ u32 droid_lkm_userns_map_parent_down(const struct droid_lkm_userns *u, u32 id,
 	struct user_namespace *parent = u->uns.parent ? u->uns.parent : droid_lkm_userns_init_uns;
 
 	/*
-	 * In kernels with CONFIG_USER_NS disabled, init_user_ns.uid_map.nr_extents is 0.
+	 * in kernels with CONFIG_USER_NS disabled, init_user_ns.uid_map.nr_extents is 0.
 	 * In the initial user namespace, all IDs are already global 1:1.
 	 */
 	if (!parent || parent == droid_lkm_userns_init_uns || !droid_lkm_userns_is_ours(parent)) {

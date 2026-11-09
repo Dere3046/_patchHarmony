@@ -63,7 +63,7 @@ static void droid_lkm_userns_selftest_step(const char *what, int ok, int ret)
 }
 
 /*
- * A sample the creator anchor refuses on purpose is not a namespace that failed. Layer three
+ * a sample the creator anchor refuses on purpose is not a namespace that failed. Layer three
  * runs in a kernel thread, which is a context no container ever runs in: the anchor refuses a
  * creator whose euid is 0 but which holds no capability over the initial namespace, exactly
  * the way it refuses an unprivileged root, because it would otherwise be handed a root

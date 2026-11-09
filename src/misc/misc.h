@@ -26,13 +26,7 @@ extern bool droid_lkm_misc_verbose;
 			pr_info("[" DROID_LKM_MISC_TAG "/dbg] " fmt, ##__VA_ARGS__); \
 	} while (0)
 
-/*
- * the GKI gate rejects part of the export list, so unexported and risky symbols
- * are resolved by name. the lookup itself is the shared one: it falls back to the
- * library's own kallsyms walk when the kernel hides an address, and it refuses a
- * hit inside this module that is not one of the module's own wrappers -- a shim
- * defined under a kernel name would otherwise resolve to itself
- */
+/* the GKI gate rejects part of the export list, so unexported and risky symbols are resolved by name */
 static inline unsigned long __nocfi droid_lkm_misc_sym(const char *name)
 {
 	return ds_compat_sym(name);

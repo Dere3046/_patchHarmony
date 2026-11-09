@@ -35,14 +35,10 @@ struct task_struct;
  * necessarily in the ksymtab. everything is resolved by name, a missing thunk disables the
  * feature that needs it and never becomes an unresolved import.
  *
- * a thunk's type is the kernel's own, taken with typeof(&symbol) from the declaration this
- * build is compiling against. clang's cfi hashes the whole function type at an indirect call,
- * so a prototype written out by hand here is a fatal cfi failure on the device the moment it
- * drifts by one qualifier, and a warning never gets there first.
- *
- * the two that are still written out are the ones with no declaration to copy: the kernel
- * defines create_new_namespaces in kernel/nsproxy.c and never declares it in a header, and
- * the ns_kind pair is this module's own export.
+ * a thunk's type is the kernel's own, taken with typeof(&symbol): clang's cfi hashes the
+ * whole function type at an indirect call, so a prototype written out here is a fatal cfi
+ * failure the moment it drifts by one qualifier, and only the ones this build has no
+ * declaration for are written out
  */
 struct droid_lkm_misc_ksym {
 	/* xt */

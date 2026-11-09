@@ -4,10 +4,8 @@
  * placeholder for tasks that stay in the initial namespace. The kind is
  * registered with the main module, which owns the ns directory lookup.
  *
- * The two registration entry points are exported symbols rather than names
- * resolved at runtime, so the loader records the dependency and droid_lkm cannot
- * leave while this module is loaded -- the registration outlives any reference
- * count this module could keep on its own.
+ * The two entry points are exported symbols, so the loader records the dependency
+ * and droid_lkm cannot leave while this module is loaded.
  */
 
 #include <linux/slab.h>
@@ -57,11 +55,10 @@ static void droid_lkm_userns_nsops_put(struct ns_common *ns)
  * setns(CLONE_NEWUSER): join a namespace this module made. The fd is an nsfs inode whose
  * ns_common is the fake namespace's own, so the work is the gate and the credential.
  *
- * Nothing is committed by the caller: prepare_nsset() built nsset->cred, a private copy,
- * and nsset_cred() is the kernel's own accessor for it. The commit is ours to do, because
- * commit_nsset() commits that credential only inside #ifdef CONFIG_USER_NS, and this module
- * refuses to run when that is enabled. Without it the install is applied and then thrown
- * away, and setns() reports success with nothing changed.
+ * Nothing is committed by the caller: prepare_nsset() built nsset->cred and nsset_cred()
+ * is the kernel's own accessor, but commit_nsset() commits it only inside #ifdef
+ * CONFIG_USER_NS, which this module refuses to run under. without the commit the install
+ * is applied and thrown away, and setns() reports success with nothing changed.
  */
 static int droid_lkm_userns_install(struct nsset *nsset, struct ns_common *ns)
 {
@@ -87,12 +84,11 @@ static int droid_lkm_userns_install(struct nsset *nsset, struct ns_common *ns)
 
 	/*
 	 * two gates, the way the pid namespace install does it: the caller has to hold
-	 * CAP_SYS_ADMIN where it stands and over the namespace it is entering. The first one
-	 * keeps this consistent with unshare(), which refuses a creator that has euid 0 but no
-	 * capability over the initial namespace instead of handing it a namespace it would then
-	 * hold full authority in. The second is answered by the security_capable chokepoint,
-	 * which walks the fake chain: the initial namespace's root may join any of them and a
-	 * task may join a namespace below its own, while an ancestor or a sibling is refused
+	 * CAP_SYS_ADMIN where it stands and over the namespace it is entering. the first
+	 * keeps this consistent with unshare(), which refuses a creator that has euid 0 but
+	 * no capability over the initial namespace. the second is answered by the
+	 * security_capable chokepoint, which walks the fake chain: the initial namespace's
+	 * root may join any of them and a task may join one below its own
 	 */
 	if (!ns_capable(current_cred()->user_ns, CAP_SYS_ADMIN) ||
 	    !ns_capable(&u->uns, CAP_SYS_ADMIN))

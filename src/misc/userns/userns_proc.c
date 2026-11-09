@@ -210,7 +210,7 @@ static int droid_lkm_userns_map_parse(const char *buf, size_t count,
 }
 
 /*
- * The namespace is resolved at open time, not at lookup time. The inode's
+ * the namespace is resolved at open time, not at lookup time. The inode's
  * i_private is the task's struct pid, borrowed: proc_pid_make_inode() holds its
  * own reference for the inode's lifetime, and a recycled pid number gets a new
  * struct pid, so get_pid_task() returns NULL after the task exits instead of a
@@ -299,7 +299,7 @@ static ssize_t droid_lkm_userns_map_read(char __user *ubuf, size_t count,
 }
 
 /*
- * In kernels with CONFIG_USER_NS disabled, file_ns_capable() is inlined to constant false.
+ * in kernels with CONFIG_USER_NS disabled, file_ns_capable() is inlined to constant false.
  * Route capability checks on file->f_cred through security_capable or ns_capable.
  */
 static bool droid_lkm_file_ns_capable(const struct file *file,
@@ -315,7 +315,7 @@ static bool droid_lkm_file_ns_capable(const struct file *file,
 }
 
 /*
- * The creator's privilege at namespace creation is the anchor: a namespace born
+ * the creator's privilege at namespace creation is the anchor: a namespace born
  * with CAP_SETUID and CAP_SETGID over the initial namespace may define any map,
  * exactly as the kernel's own map_write() allows a namespace root to. Everyone
  * else may only restate the single extent that maps the creator's own id, which
@@ -388,7 +388,7 @@ static ssize_t droid_lkm_userns_map_write_internal(struct file *file, const char
 		return -EINTR;
 
 	/*
-	 * Upstream kernel/user_namespace.c map_write():
+	 * upstream kernel/user_namespace.c map_write():
 	 * The caller must have the capability to setuid or setgid in the
 	 * parent user namespace, or the capability to setuid or setgid in
 	 * the user namespace itself.

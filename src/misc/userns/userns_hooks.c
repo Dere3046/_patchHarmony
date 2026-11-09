@@ -111,7 +111,7 @@ __nocfi noinline struct cred *droid_lkm_userns_prepcred_wrap(void)
 		return NULL;
 
 	/*
-	 * In kernels with CONFIG_USER_NS disabled, prepare_creds() shallow-copies
+	 * in kernels with CONFIG_USER_NS disabled, prepare_creds() shallow-copies
 	 * old->user_ns via memcpy, but get_user_ns() is a stub returning &init_user_ns
 	 * without refcounting. Acquire a reference for our fake user namespace.
 	 */
@@ -153,7 +153,7 @@ __nocfi noinline int droid_lkm_userns_seccap_wrap(const struct cred *cred,
 		return orig(cred, ns, cap, opts);
 
 	/*
-	 * Security boundary 1: a fake user namespace NEVER holds capabilities
+	 * security boundary 1: a fake user namespace NEVER holds capabilities
 	 * over the initial user namespace (host root). Strictly refuse with
 	 * -EPERM to prevent container escape and host privilege escalation.
 	 */
@@ -170,7 +170,7 @@ __nocfi noinline int droid_lkm_userns_seccap_wrap(const struct cred *cred,
 	cred_u = droid_lkm_userns_from_ns(cred->user_ns);
 
 	/*
-	 * Mirrors cap_capable() from security/commoncap.c:
+	 * mirrors cap_capable() from security/commoncap.c:
 	 * Examine target namespace and all of its ancestors.
 	 */
 	while (targ_u) {
@@ -406,16 +406,12 @@ __nocfi noinline bool droid_lkm_userns_mountcap_wrap(struct fs_context *fc)
 
 /*
  * chown_common() resolves the new owner with make_kuid(current_user_ns(), user), and this
- * kernel compiles away both halves of that: current_user_ns() is the constant initial
- * namespace and make_kuid() is the identity. A container asking for its own id 0 therefore
- * writes kuid 0, the host's root, onto a file it owns, and then cannot undo it: the id it
- * holds is no longer mapped in its namespace, so every later chown or chmod there is
- * refused and the file stays behind on the host as root's.
- *
- * There is no function to correct, the map lookup is inlined at every caller, so do at the
- * entry what the missing lookup would have done: translate the id the caller named, and
- * refuse one the namespace does not map, which is the -EINVAL that make_kuid() returning
- * an invalid id makes chown_common() return.
+ * kernel compiles away both halves: the namespace is the constant initial one and the map
+ * is the identity. a container asking for its own id 0 therefore writes host root onto the
+ * file and can never undo it -- its id is no longer mapped, so every later chown or chmod
+ * there is refused and the file stays behind as root's. the lookup is inlined at every
+ * caller, so the entry translates the id instead, and refuses one the namespace does not
+ * map with the -EINVAL make_kuid() would have returned
  */
 __nocfi noinline long droid_lkm_userns_fchownat_wrap(const struct pt_regs *regs)
 {

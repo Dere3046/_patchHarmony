@@ -139,11 +139,9 @@ const char *ds_compat_state_name(u8 state)
 }
 
 /*
- * the one place that decides whether an offset may be dereferenced. the anchor and
- * the BTF reader both answer DS_COMPAT_VERIFIED, a manual table DS_COMPAT_MANUAL,
- * and the build fallback DS_COMPAT_BUILD -- which is only trusted when the build
- * was asked to fall back, because a build offset that was never checked against
- * the running kernel is a guess
+ * one place answers whether an offset may be dereferenced. DS_COMPAT_BUILD counts
+ * only when the build was asked to fall back: an offset never checked against the
+ * running kernel is a guess
  */
 bool ds_compat_layout_verified(u8 state)
 {

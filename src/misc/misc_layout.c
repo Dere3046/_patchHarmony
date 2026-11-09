@@ -14,14 +14,11 @@
 #include "misc_layout.h"
 
 /*
- * the same table the other two modules hand to the same engine: BTF first, the
- * anchor symbols when the running kernel carries no BTF, and nothing at all when
- * neither can vouch for an offset. an offset here is dereferenced, not compared,
- * so an unverified one has to switch the feature off rather than fall back to
- * whatever this build happened to see
+ * the same table shape the other two modules hand to the same engine. an offset here
+ * is dereferenced, not compared, so one the engine cannot vouch for switches its
+ * feature off instead of falling back to what this build happened to see
  *
- * mnt_namespace.user_ns is the one field the anchor does not derive. it is filled
- * from BTF only, and the mount owner work reports itself unsupported without it
+ * mnt_namespace.user_ns is the one field the anchor does not derive
  */
 enum {
 	DROID_LKM_MISC_F_TASK_CRED,
@@ -80,11 +77,7 @@ bool droid_lkm_misc_layout_trusted(void)
 	return droid_lkm_misc_layout_trusted_flag;
 }
 
-/*
- * the fields this module dereferences itself. user_ns is not one of them: the
- * owner work checks it on its own and reports itself unsupported, so losing it
- * costs the mount owner and not the namespace
- */
+/* the fields this module dereferences itself; user_ns has its own check in the owner work */
 static const unsigned int droid_lkm_misc_required[] = {
 	DROID_LKM_MISC_F_TASK_CRED,
 	DROID_LKM_MISC_F_TASK_REAL_CRED,
