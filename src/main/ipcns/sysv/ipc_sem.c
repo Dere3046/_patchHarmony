@@ -169,7 +169,13 @@ struct sem_undo_list {
 };
 
 
-#define sem_ids(ns)	((ns)->ids[IPC_SEM_IDS])
+#define sem_ids(ns)	(*droid_lkm_ipcns_ids((ns), IPC_SEM_IDS))
+
+/*
+ * a direct member use fails to compile, ds_ipcns.h is the only way in
+ */
+#define sem_ctls	droid_lkm_use_ipcns_field
+#define used_sems	droid_lkm_use_ipcns_field
 
 static int newary(struct ipc_namespace *, struct ipc_params *);
 static void freeary(struct ipc_namespace *, struct kern_ipc_perm *);
@@ -244,19 +250,21 @@ static int sysvipc_sem_proc_show(struct seq_file *s, void *it);
  * See also ipc/mqueue.c for more details on the covered races.
  */
 
-#define sc_semmsl	sem_ctls[0]
-#define sc_semmns	sem_ctls[1]
-#define sc_semopm	sem_ctls[2]
-#define sc_semmni	sem_ctls[3]
+#define droid_lkm_sem_ctls(ns)                                                 \
+	droid_lkm_ns_int_ptr((ns), DROID_LKM_F_IPC_NS_SEM_CTLS)
+#define sc_semmsl(ns)	droid_lkm_sem_ctls(ns)[0]
+#define sc_semmns(ns)	droid_lkm_sem_ctls(ns)[1]
+#define sc_semopm(ns)	droid_lkm_sem_ctls(ns)[2]
+#define sc_semmni(ns)	droid_lkm_sem_ctls(ns)[3]
 
 void sem_init_ns(struct ipc_namespace *ns)
 {
-	ns->sc_semmsl = SEMMSL;
-	ns->sc_semmns = SEMMNS;
-	ns->sc_semopm = SEMOPM;
-	ns->sc_semmni = SEMMNI;
-	ns->used_sems = 0;
-	ipc_init_ids(&ns->ids[IPC_SEM_IDS]);
+	sc_semmsl(ns) = SEMMSL;
+	sc_semmns(ns) = SEMMNS;
+	sc_semopm(ns) = SEMOPM;
+	sc_semmni(ns) = SEMMNI;
+	droid_lkm_ns_int(ns, DROID_LKM_F_IPC_NS_USED_SEMS) = 0;
+	ipc_init_ids(&sem_ids(ns));
 }
 
 void sem_init(void)
@@ -533,7 +541,8 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 
 	if (!nsems)
 		return -EINVAL;
-	if (ns->used_sems + nsems > ns->sc_semmns)
+	if (droid_lkm_ns_int(ns, DROID_LKM_F_IPC_NS_USED_SEMS) + nsems >
+	    sc_semmns(ns))
 		return -ENOSPC;
 
 	sma = sem_alloc(nsems);
@@ -565,12 +574,12 @@ static int newary(struct ipc_namespace *ns, struct ipc_params *params)
 	sma->sem_ctime = ktime_get_real_seconds();
 
 	/* ipc_addid() locks sma upon success. */
-	retval = ipc_addid(&sem_ids(ns), &sma->sem_perm, ns->sc_semmni);
+	retval = ipc_addid(&sem_ids(ns), &sma->sem_perm, sc_semmni(ns));
 	if (retval < 0) {
 		ipc_rcu_putref(&sma->sem_perm, sem_rcu_free);
 		return retval;
 	}
-	ns->used_sems += nsems;
+	droid_lkm_ns_int(ns, DROID_LKM_F_IPC_NS_USED_SEMS) += nsems;
 
 	sem_unlock(sma, -1);
 	rcu_read_unlock();
@@ -605,7 +614,7 @@ long ksys_semget(key_t key, int nsems, int semflg)
 
 	ns = droid_lkm_ipcns_current();
 
-	if (nsems < 0 || nsems > ns->sc_semmsl)
+	if (nsems < 0 || nsems > sc_semmsl(ns))
 		return -EINVAL;
 
 	sem_params.key = key;
@@ -1182,7 +1191,7 @@ static void freeary(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp)
 	rcu_read_unlock();
 
 	wake_up_q(&wake_q);
-	ns->used_sems -= sma->sem_nsems;
+	droid_lkm_ns_int(ns, DROID_LKM_F_IPC_NS_USED_SEMS) -= sma->sem_nsems;
 	ipc_rcu_putref(&sma->sem_perm, sem_rcu_free);
 }
 
@@ -1311,10 +1320,10 @@ static int semctl_info(struct ipc_namespace *ns, int semid,
 		return err;
 
 	memset(&seminfo, 0, sizeof(seminfo));
-	seminfo.semmni = ns->sc_semmni;
-	seminfo.semmns = ns->sc_semmns;
-	seminfo.semmsl = ns->sc_semmsl;
-	seminfo.semopm = ns->sc_semopm;
+	seminfo.semmni = sc_semmni(ns);
+	seminfo.semmns = sc_semmns(ns);
+	seminfo.semmsl = sc_semmsl(ns);
+	seminfo.semopm = sc_semopm(ns);
 	seminfo.semvmx = SEMVMX;
 	seminfo.semmnu = SEMMNU;
 	seminfo.semmap = SEMMAP;
@@ -1322,7 +1331,7 @@ static int semctl_info(struct ipc_namespace *ns, int semid,
 	down_read(&sem_ids(ns).rwsem);
 	if (cmd == SEM_INFO) {
 		seminfo.semusz = sem_ids(ns).in_use;
-		seminfo.semaem = ns->used_sems;
+		seminfo.semaem = droid_lkm_ns_int(ns, DROID_LKM_F_IPC_NS_USED_SEMS);
 	} else {
 		seminfo.semusz = SEMUSZ;
 		seminfo.semaem = SEMAEM;
@@ -1991,7 +2000,7 @@ long __do_semtimedop(int semid, struct sembuf *sops,
 
 	if (nsops < 1 || semid < 0)
 		return -EINVAL;
-	if (nsops > ns->sc_semopm)
+	if (nsops > sc_semopm(ns))
 		return -E2BIG;
 
 	if (timeout) {
@@ -2222,7 +2231,7 @@ static long do_semtimedop(int semid, struct sembuf __user *tsops,
 	int ret;
 
 	ns = droid_lkm_ipcns_current();
-	if (nsops > ns->sc_semopm)
+	if (nsops > sc_semopm(ns))
 		return -E2BIG;
 	if (nsops < 1)
 		return -EINVAL;

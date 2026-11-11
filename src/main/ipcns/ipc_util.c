@@ -611,7 +611,7 @@ int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flag)
 		granted_mode >>= 3;
 	/* is there some bit set in requested_mode but not in granted_mode? */
 	if ((requested_mode & ~granted_mode & 0007) &&
-	    !ns_capable(ns->user_ns, CAP_IPC_OWNER))
+	    !ns_capable(droid_lkm_ipcns_user_ns(ns), CAP_IPC_OWNER))
 		return -1;
 
 	return security_ipc_permission(ipcp, flag);
@@ -786,7 +786,7 @@ struct kern_ipc_perm *ipcctl_obtain_check(struct ipc_namespace *ns,
 
 	euid = current_euid();
 	if (uid_eq(euid, ipcp->cuid) || uid_eq(euid, ipcp->uid)  ||
-	    ns_capable(ns->user_ns, CAP_SYS_ADMIN))
+	    ns_capable(droid_lkm_ipcns_user_ns(ns), CAP_SYS_ADMIN))
 		return ipcp; /* successful lookup */
 err:
 	return ERR_PTR(err);
@@ -874,7 +874,8 @@ static void *sysvipc_proc_next(struct seq_file *s, void *it, loff_t *pos)
 
 	/* Next -> search for *pos+1 */
 	(*pos)++;
-	return sysvipc_find_ipc(&iter->ns->ids[iface->ids], pos);
+	return sysvipc_find_ipc(droid_lkm_ipcns_ids(iter->ns, iface->ids),
+				pos);
 }
 
 /*
@@ -887,7 +888,7 @@ static void *sysvipc_proc_start(struct seq_file *s, loff_t *pos)
 	struct ipc_proc_iface *iface = iter->iface;
 	struct ipc_ids *ids;
 
-	ids = &iter->ns->ids[iface->ids];
+	ids = droid_lkm_ipcns_ids(iter->ns, iface->ids);
 
 	/*
 	 * Take the lock - this will be released by the corresponding
@@ -918,7 +919,7 @@ static void sysvipc_proc_stop(struct seq_file *s, void *it)
 	if (ipc && ipc != SEQ_START_TOKEN)
 		ipc_unlock(ipc);
 
-	ids = &iter->ns->ids[iface->ids];
+	ids = droid_lkm_ipcns_ids(iter->ns, iface->ids);
 	/* Release the lock we took in start() */
 	up_read(&ids->rwsem);
 }

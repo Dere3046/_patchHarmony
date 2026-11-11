@@ -153,7 +153,26 @@ struct shm_file_data {
 static const struct file_operations shm_file_operations;
 static const struct vm_operations_struct shm_vm_ops;
 
-#define shm_ids(ns)	((ns)->ids[IPC_SHM_IDS])
+#define shm_ids(ns)	(*droid_lkm_ipcns_ids((ns), IPC_SHM_IDS))
+
+/*
+ * a direct member use fails to compile, ds_ipcns.h is the only way in
+ */
+#define shm_ctlmax	droid_lkm_use_ipcns_field
+#define shm_ctlall	droid_lkm_use_ipcns_field
+#define shm_ctlmni	droid_lkm_use_ipcns_field
+#define shm_rmid_forced	droid_lkm_use_ipcns_field
+
+#define droid_lkm_shm_ctlmax(ns)                                               \
+	droid_lkm_ns_size((ns), DROID_LKM_F_IPC_NS_SHM_CTLMAX)
+#define droid_lkm_shm_ctlall(ns)                                               \
+	droid_lkm_ns_size((ns), DROID_LKM_F_IPC_NS_SHM_CTLALL)
+#define droid_lkm_shm_ctlmni(ns)                                               \
+	droid_lkm_ns_int((ns), DROID_LKM_F_IPC_NS_SHM_CTLMNI)
+#define droid_lkm_shm_rmid_forced(ns)                                          \
+	droid_lkm_ns_int((ns), DROID_LKM_F_IPC_NS_SHM_RMID_FORCED)
+#define droid_lkm_shm_tot(ns)                                                  \
+	droid_lkm_ns_ulong((ns), DROID_LKM_F_IPC_NS_SHM_TOT)
 
 #define shm_unlock(shp)			\
 	ipc_unlock(&(shp)->shm_perm)
@@ -168,11 +187,11 @@ static int sysvipc_shm_proc_show(struct seq_file *s, void *it);
 
 void shm_init_ns(struct ipc_namespace *ns)
 {
-	ns->shm_ctlmax = SHMMAX;
-	ns->shm_ctlall = SHMALL;
-	ns->shm_ctlmni = SHMMNI;
-	ns->shm_rmid_forced = 0;
-	ns->shm_tot = 0;
+	droid_lkm_shm_ctlmax(ns) = SHMMAX;
+	droid_lkm_shm_ctlall(ns) = SHMALL;
+	droid_lkm_shm_ctlmni(ns) = SHMMNI;
+	droid_lkm_shm_rmid_forced(ns) = 0;
+	droid_lkm_shm_tot(ns) = 0;
 	ipc_init_ids(&shm_ids(ns));
 }
 
@@ -374,7 +393,7 @@ static void shm_destroy(struct ipc_namespace *ns, struct shmid_kernel *shp)
 
 	shm_file = shp->shm_file;
 	shp->shm_file = NULL;
-	ns->shm_tot -= (shp->shm_segsz + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	droid_lkm_shm_tot(ns) -= (shp->shm_segsz + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	shm_rmid(shp);
 	shm_unlock(shp);
 	if (!is_file_hugepages(shm_file))
@@ -398,7 +417,7 @@ static void shm_destroy(struct ipc_namespace *ns, struct shmid_kernel *shp)
 static bool shm_may_destroy(struct shmid_kernel *shp)
 {
 	return (shp->shm_nattch == 0) &&
-	       (shp->ns->shm_rmid_forced ||
+	       (droid_lkm_shm_rmid_forced(shp->ns) ||
 		(shp->shm_perm.mode & SHM_DEST));
 }
 
@@ -512,7 +531,7 @@ void droid_lkm_exit_shm_impl(struct task_struct *task)
 		 * which shmids are orphaned, so that a later set of the sysctl
 		 * can clean them up.
 		 */
-		if (!ns->shm_rmid_forced)
+		if (!droid_lkm_shm_rmid_forced(ns))
 			goto unlink_continue;
 
 		/*
@@ -751,14 +770,14 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	char name[13];
 	vm_flags_t acctflag = 0;
 
-	if (size < SHMMIN || size > ns->shm_ctlmax)
+	if (size < SHMMIN || size > droid_lkm_shm_ctlmax(ns))
 		return -EINVAL;
 
 	if (numpages << PAGE_SHIFT < size)
 		return -ENOSPC;
 
-	if (ns->shm_tot + numpages < ns->shm_tot ||
-			ns->shm_tot + numpages > ns->shm_ctlall)
+	if (droid_lkm_shm_tot(ns) + numpages < droid_lkm_shm_tot(ns) ||
+	    droid_lkm_shm_tot(ns) + numpages > droid_lkm_shm_ctlall(ns))
 		return -ENOSPC;
 
 	shp = kmalloc(sizeof(*shp), GFP_KERNEL_ACCOUNT);
@@ -819,7 +838,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	shp->shm_creator = current;
 
 	/* ipc_addid() locks shp upon success. */
-	error = ipc_addid(&shm_ids(ns), &shp->shm_perm, ns->shm_ctlmni);
+	error = ipc_addid(&shm_ids(ns), &shp->shm_perm, droid_lkm_shm_ctlmni(ns));
 	if (error < 0)
 		goto no_id;
 
@@ -835,7 +854,7 @@ static int newseg(struct ipc_namespace *ns, struct ipc_params *params)
 	 */
 	file_inode(file)->i_ino = shp->shm_perm.id;
 
-	ns->shm_tot += numpages;
+	droid_lkm_shm_tot(ns) += numpages;
 	error = shp->shm_perm.id;
 
 	ipc_unlock_object(&shp->shm_perm);
@@ -1087,9 +1106,9 @@ static int shmctl_ipc_info(struct ipc_namespace *ns,
 	int err = security_shm_shmctl(NULL, IPC_INFO);
 	if (!err) {
 		memset(shminfo, 0, sizeof(*shminfo));
-		shminfo->shmmni = shminfo->shmseg = ns->shm_ctlmni;
-		shminfo->shmmax = ns->shm_ctlmax;
-		shminfo->shmall = ns->shm_ctlall;
+		shminfo->shmmni = shminfo->shmseg = droid_lkm_shm_ctlmni(ns);
+		shminfo->shmmax = droid_lkm_shm_ctlmax(ns);
+		shminfo->shmall = droid_lkm_shm_ctlall(ns);
 		shminfo->shmmin = SHMMIN;
 		down_read(&shm_ids(ns).rwsem);
 		err = ipc_get_maxidx(&shm_ids(ns));
@@ -1109,7 +1128,7 @@ static int shmctl_shm_info(struct ipc_namespace *ns,
 		down_read(&shm_ids(ns).rwsem);
 		shm_info->used_ids = shm_ids(ns).in_use;
 		shm_get_stat(ns, &shm_info->shm_rss, &shm_info->shm_swp);
-		shm_info->shm_tot = ns->shm_tot;
+		shm_info->shm_tot = droid_lkm_shm_tot(ns);
 		shm_info->swap_attempts = 0;
 		shm_info->swap_successes = 0;
 		err = ipc_get_maxidx(&shm_ids(ns));
@@ -1230,7 +1249,7 @@ static int shmctl_do_lock(struct ipc_namespace *ns, int shmid, int cmd)
 		goto out_unlock0;
 	}
 
-	if (!ns_capable(ns->user_ns, CAP_IPC_LOCK)) {
+	if (!ns_capable(droid_lkm_ipcns_user_ns(ns), CAP_IPC_LOCK)) {
 		kuid_t euid = current_euid();
 
 		if (!uid_eq(euid, shp->shm_perm.uid) &&

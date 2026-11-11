@@ -16,6 +16,8 @@
 #include <linux/ipc_namespace.h>
 #include <linux/pid.h>
 
+#include "ds_ipcns.h"
+
 /*
  * The IPC ID contains 2 separate numbers - index and sequence number.
  * By default,
@@ -241,8 +243,9 @@ static inline int sem_check_semmni(struct ipc_namespace *ns) {
 	 * Check semmni range [0, ipc_mni]
 	 * semmni is the last element of sem_ctls[4] array
 	 */
-	return ((ns->sem_ctls[3] < 0) || (ns->sem_ctls[3] > ipc_mni))
-		? -ERANGE : 0;
+	int semmni = droid_lkm_ns_int_ptr(ns, DROID_LKM_F_IPC_NS_SEM_CTLS)[3];
+
+	return (semmni < 0 || semmni > ipc_mni) ? -ERANGE : 0;
 }
 
 #ifdef CONFIG_COMPAT

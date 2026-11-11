@@ -12,7 +12,7 @@ enum ds_compat_state {
 	DS_COMPAT_OK = 0,
 	DS_COMPAT_NO_TYPE,	/* the running kernel has no such struct in BTF */
 	DS_COMPAT_NO_MEMBER,	/* the struct is there, the member is not */
-	DS_COMPAT_DIFFERS,	/* both are there and the offset is not the build's */
+	DS_COMPAT_DIFFERS,	/* the member is a different width in the kernel */
 	DS_COMPAT_UNVERIFIED,	/* no backend answered for it */
 	DS_COMPAT_ANCHORED,	/* the anchor backend found it */
 	DS_COMPAT_VERIFIED,	/* an anchor or a cross check confirmed it */
@@ -20,12 +20,22 @@ enum ds_compat_state {
 	DS_COMPAT_BUILD,	/* module owned struct, or the build fallback */
 };
 
+/* the port that asks for a field, ANY means every port */
+enum ds_compat_need {
+	DS_COMPAT_NEED_ANY = 0,
+	DS_COMPAT_NEED_SYSV,
+	DS_COMPAT_NEED_MQUEUE,
+};
+
 struct ds_compat_field {
 	const char *type;
 	const char *member;
 	u32 build;		/* offsetof from the headers this module was built with */
 	u32 live;		/* offset in the running kernel, 0 when refused */
+	u32 build_size;		/* sizeof of the member, 0 for an array */
+	u32 live_size;		/* the same member in the running kernel */
 	u8 state;
+	u8 need;
 };
 
 struct ds_compat_type {

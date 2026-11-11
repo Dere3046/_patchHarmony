@@ -156,7 +156,7 @@ static void ds_compat_layout_unverified(struct ds_compat_layout *l)
 bool ds_compat_layout_init(struct ds_compat_layout *l)
 {
 	struct ti_resolver res = { .name_to_addr = ds_compat_sym };
-	unsigned int ok = 0, missing = 0;
+	unsigned int ok = 0, missing = 0, differ = 0;
 	unsigned int i;
 
 	if (!l || !l->fields || !l->types)
@@ -173,7 +173,7 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 
 	for (i = 0; i < l->nfields; i++) {
 		struct ds_compat_field *f = &l->fields[i];
-		u32 type_id, bit_off, bit_sz;
+		u32 type_id, member_type, bit_off, bit_sz;
 
 		if (ti_type_by_name(ti_base(), f->type, BIT(BTF_KIND_STRUCT),
 				    &type_id)) {
@@ -181,15 +181,27 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 			missing++;
 			continue;
 		}
-		if (ti_member_off(ti_base(), type_id, f->member, &bit_off,
-				  &bit_sz)) {
+		if (ti_member_info(ti_base(), type_id, f->member, &member_type,
+				   &bit_off, &bit_sz)) {
 			f->state = DS_COMPAT_NO_MEMBER;
 			missing++;
 			continue;
 		}
 
 		f->live = bit_off / 8;
+		/*
+		 * a bitfield is the only width btf carries, everything else
+		 * comes from the member's type through its typedefs
+		 */
+		if (!bit_sz && !ti_follow(ti_base(), member_type, &member_type))
+			f->live_size = ti_type_size(ti_base(), member_type);
+		else
+			f->live_size = bit_sz / 8;
 		f->state = DS_COMPAT_OK;
+		if (f->build_size && f->live_size != f->build_size) {
+			f->state = DS_COMPAT_DIFFERS;
+			differ++;
+		}
 		ok++;
 	}
 
@@ -212,15 +224,16 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 		t->state = DS_COMPAT_OK;
 	}
 
-	ds_compat_info("layout: BTF %u/%u fields live, %u not in BTF\n",
-		       ok, l->nfields, missing);
+	ds_compat_info("layout: BTF %u/%u fields live, %u not in BTF, %u differ\n",
+		       ok, l->nfields, missing, differ);
 
 	for (i = 0; i < l->nfields; i++) {
 		struct ds_compat_field *f = &l->fields[i];
 
 		if (f->state == DS_COMPAT_DIFFERS)
-			ds_compat_warn("%s.%s is at %u in the running kernel, this build uses %u\n",
-				       f->type, f->member, f->live, f->build);
+			ds_compat_warn("%s.%s width %u, this build uses %u\n",
+				       f->type, f->member, f->live_size,
+				       f->build_size);
 	}
 
 	return !missing;
@@ -240,6 +253,7 @@ void ds_compat_layout_fallback(struct ds_compat_layout *l)
 		    f->state == DS_COMPAT_ANCHORED || f->state == DS_COMPAT_BUILD)
 			continue;
 		f->live = f->build;
+		f->live_size = f->build_size;
 		f->state = DS_COMPAT_BUILD;
 		ds_compat_warn("layout fallback: %s.%s uses build %u\n",
 			       f->type, f->member, f->build);
@@ -266,6 +280,7 @@ void ds_compat_layout_force_build(struct ds_compat_layout *l)
 
 	for (i = 0; i < l->nfields; i++) {
 		l->fields[i].live = l->fields[i].build;
+		l->fields[i].live_size = l->fields[i].build_size;
 		l->fields[i].state = DS_COMPAT_BUILD;
 	}
 	for (i = 0; i < l->ntypes; i++) {

@@ -16,6 +16,7 @@ module_param_named(force_ipc_owner, droid_lkm_force_ipc_owner, bool, 0444);
 #include "ds.h"
 #include "ds_caps.h"
 #include "ds_ksym.h"
+#include "ds_ti.h"
 
 struct droid_lkm_caps droid_lkm_caps;
 
@@ -65,6 +66,31 @@ static unsigned long droid_lkm_caps_sym_any(const char *const *names, int n)
 			return addr;
 	}
 	return 0;
+}
+
+/*
+ * a member btf did not verify has no live offset, so the port stays off
+ * rather than write at the build offset
+ */
+static void droid_lkm_caps_ipc_layout(void)
+{
+	struct droid_lkm_caps *caps = &droid_lkm_caps;
+
+	if (caps->ipc_ns.owner != DROID_LKM_KERNEL)
+		return;
+
+	if (caps->sysvipc.owner == DROID_LKM_MODULE &&
+	    !droid_lkm_layout_ipcns_ok(DS_COMPAT_NEED_SYSV)) {
+		caps->sysvipc.owner = DROID_LKM_ABSENT;
+		caps->sysvipc.reason =
+			"the running kernel ipc_namespace layout is not verified";
+	}
+	if (caps->posix_mqueue.owner == DROID_LKM_MODULE &&
+	    !droid_lkm_layout_ipcns_ok(DS_COMPAT_NEED_MQUEUE)) {
+		caps->posix_mqueue.owner = DROID_LKM_ABSENT;
+		caps->posix_mqueue.reason =
+			"the running kernel ipc_namespace layout is not verified";
+	}
 }
 
 static void droid_lkm_caps_classify(void)
@@ -198,6 +224,7 @@ int droid_lkm_caps_init(void)
 	}
 
 	droid_lkm_caps_classify();
+	droid_lkm_caps_ipc_layout();
 
 	return 0;
 }

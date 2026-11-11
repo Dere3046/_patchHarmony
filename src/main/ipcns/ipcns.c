@@ -78,12 +78,37 @@ u32 droid_lkm_ipcns_off(enum droid_lkm_field_id id)
 	return droid_lkm_layout_build_off(id);
 }
 
+void *droid_lkm_ipcns_field(struct ipc_namespace *ns,
+			    enum droid_lkm_field_id id)
+{
+	return (char *)ns + droid_lkm_ipcns_off(id);
+}
+
+u32 droid_lkm_ipcns_ids_size(void)
+{
+	u32 live;
+
+	if (!droid_lkm_ipcns_kernel_owned)
+		return sizeof(struct ipc_ids);
+
+	live = droid_lkm_layout_type_size(DROID_LKM_T_IPC_IDS);
+	/* a stride of zero would alias every index onto the first element */
+	return live ? live : sizeof(struct ipc_ids);
+}
+
+struct ipc_ids *droid_lkm_ipcns_ids(struct ipc_namespace *ns, int which)
+{
+	void *ids = droid_lkm_ipcns_field(ns, DROID_LKM_F_IPC_NS_IDS);
+
+	return (void *)((char *)ids + which * (int)droid_lkm_ipcns_ids_size());
+}
+
 static void droid_lkm_ipcns_trace(const char *where, struct ipc_namespace *ns)
 {
 	if (droid_lkm_verbose)
 		droid_lkm_dbg("ipcns %s %px user_ns %px\n", where, ns,
-			      ns->user_ns);
-	else if (!ns->user_ns)
+			      droid_lkm_ipcns_user_ns(ns));
+	else if (!droid_lkm_ipcns_user_ns(ns))
 		droid_lkm_warn("ipcns %s %px has no user_ns\n", where, ns);
 }
 
@@ -98,15 +123,15 @@ static void droid_lkm_ipcns_destroy_ids(struct ipc_namespace *ns)
 {
 	int i;
 
-	if (ns->mq_mnt) {
+	if (droid_lkm_ipcns_mq_mnt(ns)) {
 		droid_lkm_retire_mq_sysctls(ns);
 		droid_lkm_mq_clear_sbinfo(ns);
 		droid_lkm_mq_put_mnt(ns);
-		ns->mq_mnt = NULL;
+		droid_lkm_ipcns_set_mq_mnt(ns, NULL);
 	}
 
-	for (i = 0; i < ARRAY_SIZE(ns->ids); i++)
-		idr_destroy(&ns->ids[i].ipcs_idr);
+	for (i = 0; i < DROID_LKM_IPC_IDS_COUNT; i++)
+		idr_destroy(&droid_lkm_ipcns_ids(ns, i)->ipcs_idr);
 }
 
 __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
@@ -187,10 +212,10 @@ out_kernel_ns:
 	droid_lkm_ns_set_ops(&ns->ns, &droid_lkm_ipcns_ops, CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(ns), 1);
 	/* same ownership rule as the fake pid namespace, see droid_lkm_pidns_create */
-	ns->user_ns = droid_lkm_task_cred(current)->user_ns;
-	droid_lkm_get_user_ns(ns->user_ns);
+	droid_lkm_ipcns_set_user_ns(ns, droid_lkm_task_cred(current)->user_ns);
+	droid_lkm_get_user_ns(droid_lkm_ipcns_user_ns(ns));
 	droid_lkm_ipcns_trace("create", ns);
-	ns->ucounts = NULL;
+	droid_lkm_ns_ptr(ns, DROID_LKM_F_IPC_NS_UCOUNTS, struct ucounts) = NULL;
 
 	err = msg_init_ns(ns);
 	if (err)
@@ -236,8 +261,8 @@ out_ids:
 	ds_free_ipc_ns(ns);
 	return ERR_PTR(err);
 out_inum:
-	if (ns->user_ns)
-		put_user_ns(ns->user_ns);
+	if (droid_lkm_ipcns_user_ns(ns))
+		put_user_ns(droid_lkm_ipcns_user_ns(ns));
 	droid_lkm_ks.proc_free_inum(ns->ns.inum);
 out_free:
 	kfree(ns);
@@ -265,8 +290,8 @@ static __nocfi noinline void ds_free_ipc_ns(struct ipc_namespace *ns)
 	droid_lkm_ipc_sysctls_retire(ns);
 	droid_lkm_ipcns_destroy_ids(ns);
 
-	if (ns->user_ns)
-		put_user_ns(ns->user_ns);
+	if (droid_lkm_ipcns_user_ns(ns))
+		put_user_ns(droid_lkm_ipcns_user_ns(ns));
 	if (ns->ns.inum)
 		droid_lkm_ks.proc_free_inum(ns->ns.inum);
 	kfree(ns);
@@ -407,7 +432,7 @@ static int droid_lkm_ipcns_install(struct nsset *nsset, struct ns_common *new)
 	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), ns);
 	droid_lkm_ipcns_trace("setns", ns);
 
-	if (!ns_capable(ns->user_ns, CAP_SYS_ADMIN) ||
+	if (!ns_capable(droid_lkm_ipcns_user_ns(ns), CAP_SYS_ADMIN) ||
 	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -417,7 +442,7 @@ static int droid_lkm_ipcns_install(struct nsset *nsset, struct ns_common *new)
 
 static struct user_namespace *droid_lkm_ipcns_owner(struct ns_common *ns)
 {
-	return to_ipc_ns(ns)->user_ns;
+	return droid_lkm_ipcns_user_ns(to_ipc_ns(ns));
 }
 
 const struct proc_ns_operations droid_lkm_ipcns_ops = {
@@ -438,8 +463,8 @@ bool droid_lkm_ipcns_in_use(struct ipc_namespace *ns)
 	if (!ns)
 		return false;
 
-	for (i = 0; i < ARRAY_SIZE(ns->ids); i++) {
-		struct ipc_ids *ids = &ns->ids[i];
+	for (i = 0; i < DROID_LKM_IPC_IDS_COUNT; i++) {
+		struct ipc_ids *ids = droid_lkm_ipcns_ids(ns, i);
 		bool used;
 
 		down_read(&ids->rwsem);
@@ -460,8 +485,8 @@ static bool droid_lkm_ipcns_ids_used(struct ipc_namespace *ns)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(ns->ids); i++) {
-		if (READ_ONCE(ns->ids[i].in_use) > 0)
+	for (i = 0; i < DROID_LKM_IPC_IDS_COUNT; i++) {
+		if (READ_ONCE(droid_lkm_ipcns_ids(ns, i)->in_use) > 0)
 			return true;
 	}
 	return false;
@@ -526,7 +551,8 @@ int droid_lkm_ipcns_init(void)
 	droid_lkm_ns_set_ops(&droid_lkm_ipcns_host->ns, &droid_lkm_ipcns_ops,
 			     CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(droid_lkm_ipcns_host), 1);
-	droid_lkm_ipcns_host->user_ns = droid_lkm_ks.init_user_ns;
+	droid_lkm_ipcns_set_user_ns(droid_lkm_ipcns_host,
+				    droid_lkm_ks.init_user_ns);
 	droid_lkm_ipcns_trace("host", droid_lkm_ipcns_host);
 
 	droid_lkm_ipcns_init_entry.ns = droid_lkm_ipcns_host;

@@ -538,8 +538,8 @@ void droid_lkm_mqueue_shim_retract(void)
  */
 void droid_lkm_mq_put_mnt(struct ipc_namespace *ns)
 {
-	if (ns->mq_mnt)
-		kern_unmount(ns->mq_mnt);
+	if (droid_lkm_ipcns_mq_mnt(ns))
+		kern_unmount(droid_lkm_ipcns_mq_mnt(ns));
 }
 
 static int droid_lkm_mq_d_delete(const struct dentry *dentry)

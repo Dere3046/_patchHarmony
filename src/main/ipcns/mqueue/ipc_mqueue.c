@@ -43,6 +43,7 @@
 
 #include <net/sock.h>
 #include "ds.h"
+
 #include "ds_caps.h"
 #include "ds_shapes.h"
 #include "ds_ipc_compat.h"
@@ -50,6 +51,20 @@
 #include "ds_ipcns.h"
 #include "ipc_util.h"
 #include "ipc_mqueue_compat.h"
+
+/*
+ * a direct member use fails to compile, ds_ipcns.h is the only way in
+ */
+#define mq_queues_count	droid_lkm_use_ipcns_field
+#define mq_queues_max	droid_lkm_use_ipcns_field
+#define mq_msg_max	droid_lkm_use_ipcns_field
+#define mq_msgsize_max	droid_lkm_use_ipcns_field
+#define mq_msg_default	droid_lkm_use_ipcns_field
+#define mq_msgsize_default	droid_lkm_use_ipcns_field
+#define mq_mnt	droid_lkm_use_ipcns_field
+
+#define droid_lkm_mq_scalar(ns, id)	droid_lkm_ns_uint((ns), (id))
+#define droid_lkm_mq_ptr(ns)	droid_lkm_ipcns_mq_mnt(ns)
 
 DROID_LKM_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 
@@ -334,10 +349,12 @@ static __nocfi noinline struct inode *mqueue_get_inode(struct super_block *sb,
 		info->msg_tree_rightmost = NULL;
 		info->node_cache = NULL;
 		memset(&info->attr, 0, sizeof(info->attr));
-		info->attr.mq_maxmsg = min(ipc_ns->mq_msg_max,
-					   ipc_ns->mq_msg_default);
-		info->attr.mq_msgsize = min(ipc_ns->mq_msgsize_max,
-					    ipc_ns->mq_msgsize_default);
+		info->attr.mq_maxmsg =
+			min(droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSG_MAX),
+			    droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT));
+		info->attr.mq_msgsize =
+			min(droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX),
+			    droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT));
 		if (attr) {
 			info->attr.mq_maxmsg = attr->mq_maxmsg;
 			info->attr.mq_msgsize = attr->mq_msgsize;
@@ -364,8 +381,10 @@ static __nocfi noinline struct inode *mqueue_get_inode(struct super_block *sb,
 			    info->attr.mq_msgsize > DROID_LKM_HARD_MSGSIZEMAX)
 				goto out_inode;
 		} else {
-			if (info->attr.mq_maxmsg > ipc_ns->mq_msg_max ||
-					info->attr.mq_msgsize > ipc_ns->mq_msgsize_max)
+			if (info->attr.mq_maxmsg >
+				    droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSG_MAX) ||
+			    info->attr.mq_msgsize >
+				    droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX))
 				goto out_inode;
 		}
 		ret = -EOVERFLOW;
@@ -465,7 +484,7 @@ static int mqueue_init_fs_context(struct fs_context *fc)
 
 	ctx->ipc_ns = get_ipc_ns(droid_lkm_ipcns_current());
 	put_user_ns(fc->user_ns);
-	fc->user_ns = droid_lkm_get_user_ns(ctx->ipc_ns->user_ns);
+	fc->user_ns = droid_lkm_get_user_ns(droid_lkm_ipcns_user_ns(ctx->ipc_ns));
 	fc->fs_private = ctx;
 	fc->ops = &mqueue_fs_context_ops;
 	return 0;
@@ -489,7 +508,7 @@ static __nocfi noinline struct vfsmount *mq_create_mount(struct ipc_namespace *n
 	put_ipc_ns(ctx->ipc_ns);
 	ctx->ipc_ns = get_ipc_ns(ns);
 	put_user_ns(fc->user_ns);
-	fc->user_ns = droid_lkm_get_user_ns(ctx->ipc_ns->user_ns);
+	fc->user_ns = droid_lkm_get_user_ns(droid_lkm_ipcns_user_ns(ctx->ipc_ns));
 
 	mnt = fc_mount(fc);
 	put_fs_context(fc);
@@ -563,7 +582,7 @@ static void mqueue_evict_inode(struct inode *inode)
 		 * We can't put it here under mq_lock, though.
 		 */
 		if (ipc_ns)
-			ipc_ns->mq_queues_count--;
+			droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT)--;
 		spin_unlock(&mq_lock);
 		put_ucounts(info->ucounts);
 		info->ucounts = NULL;
@@ -586,24 +605,25 @@ static int mqueue_create_attr(struct dentry *dentry, umode_t mode, void *arg)
 		struct ipc_namespace *cur = droid_lkm_ipcns_current();
 
 		droid_lkm_warn("mq create: s_fs_info null dir=%p sb=%p cur_ns=%p mnt=%p\n",
-			       dir, dir->i_sb, cur, cur ? cur->mq_mnt : NULL);
+			       dir, dir->i_sb, cur, cur ? droid_lkm_mq_ptr(cur) : NULL);
 		error = -EACCES;
 		goto out_unlock;
 	}
 
-	if (ipc_ns->mq_queues_count >= ipc_ns->mq_queues_max &&
+	if (droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT) >=
+	    droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX) &&
 	    !capable(CAP_SYS_RESOURCE)) {
 		error = -ENOSPC;
 		goto out_unlock;
 	}
-	ipc_ns->mq_queues_count++;
+	droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT)++;
 	spin_unlock(&mq_lock);
 
 	inode = mqueue_get_inode(dir->i_sb, ipc_ns, mode, attr);
 	if (IS_ERR(inode)) {
 		error = PTR_ERR(inode);
 		spin_lock(&mq_lock);
-		ipc_ns->mq_queues_count--;
+		droid_lkm_mq_scalar(ipc_ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT)--;
 		goto out_unlock;
 	}
 
@@ -963,9 +983,9 @@ static __nocfi noinline int do_mq_open(const char __user *u_name, int oflag, umo
 	 * host namespace the module serves, and a namespace that has no mqueue
 	 * mount is refused rather than dereferenced
 	 */
-	if (!ipc_ns || !ipc_ns->mq_mnt)
+	if (!ipc_ns || !droid_lkm_mq_ptr(ipc_ns))
 		return -ENODEV;
-	mnt = ipc_ns->mq_mnt;
+	mnt = droid_lkm_mq_ptr(ipc_ns);
 	root = mnt->mnt_root;
 
 	audit_mq_open(oflag, mode, attr);
@@ -1044,9 +1064,9 @@ __nocfi noinline SYSCALL_DEFINE1(mq_unlink, const char __user *, u_name)
 	struct ipc_namespace *ipc_ns = droid_lkm_ipcns_current();
 	struct vfsmount *mnt;
 
-	if (!ipc_ns || !ipc_ns->mq_mnt)
+	if (!ipc_ns || !droid_lkm_mq_ptr(ipc_ns))
 		return -ENODEV;
-	mnt = ipc_ns->mq_mnt;
+	mnt = droid_lkm_mq_ptr(ipc_ns);
 
 	name = droid_lkm_getname(u_name);
 	if (IS_ERR(name))
@@ -1783,23 +1803,28 @@ int droid_lkm_mq_init_ns(struct ipc_namespace *ns)
 {
 	struct vfsmount *m;
 
-	ns->mq_queues_count  = 0;
-	ns->mq_queues_max    = DROID_LKM_DFLT_QUEUESMAX;
-	ns->mq_msg_max       = DROID_LKM_DFLT_MSGMAX;
-	ns->mq_msgsize_max   = DROID_LKM_DFLT_MSGSIZEMAX;
-	ns->mq_msg_default   = DROID_LKM_DFLT_MSG;
-	ns->mq_msgsize_default  = DROID_LKM_DFLT_MSGSIZE;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT) = 0;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX) =
+		DROID_LKM_DFLT_QUEUESMAX;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_MSG_MAX) =
+		DROID_LKM_DFLT_MSGMAX;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX) =
+		DROID_LKM_DFLT_MSGSIZEMAX;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT) =
+		DROID_LKM_DFLT_MSG;
+	droid_lkm_mq_scalar(ns, DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT) =
+		DROID_LKM_DFLT_MSGSIZE;
 
 	m = mq_create_mount(ns);
 	if (IS_ERR(m))
 		return PTR_ERR(m);
-	ns->mq_mnt = m;
+	droid_lkm_ipcns_set_mq_mnt(ns, m);
 	return 0;
 }
 
 void droid_lkm_mq_clear_sbinfo(struct ipc_namespace *ns)
 {
-	ns->mq_mnt->mnt_sb->s_fs_info = NULL;
+	droid_lkm_mq_ptr(ns)->mnt_sb->s_fs_info = NULL;
 }
 
 int __init droid_lkm_mqueue_fs_init(void)

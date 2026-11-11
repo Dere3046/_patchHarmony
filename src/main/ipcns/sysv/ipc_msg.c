@@ -227,7 +227,21 @@ struct msg_sender {
 #define SEARCH_LESSEQUAL	4
 #define SEARCH_NUMBER		5
 
-#define msg_ids(ns)	((ns)->ids[IPC_MSG_IDS])
+#define msg_ids(ns)	(*droid_lkm_ipcns_ids((ns), IPC_MSG_IDS))
+
+/*
+ * a direct member use fails to compile, ds_ipcns.h is the only way in
+ */
+#define msg_ctlmax	droid_lkm_use_ipcns_field
+#define msg_ctlmnb	droid_lkm_use_ipcns_field
+#define msg_ctlmni	droid_lkm_use_ipcns_field
+
+#define droid_lkm_msg_ctlmax(ns)                                               \
+	droid_lkm_ns_uint((ns), DROID_LKM_F_IPC_NS_MSG_CTLMAX)
+#define droid_lkm_msg_ctlmnb(ns)                                               \
+	droid_lkm_ns_uint((ns), DROID_LKM_F_IPC_NS_MSG_CTLMNB)
+#define droid_lkm_msg_ctlmni(ns)                                               \
+	droid_lkm_ns_uint((ns), DROID_LKM_F_IPC_NS_MSG_CTLMNI)
 
 static inline struct msg_queue *msq_obtain_object(struct ipc_namespace *ns, int id)
 {
@@ -295,14 +309,14 @@ static int newque(struct ipc_namespace *ns, struct ipc_params *params)
 	msq->q_stime = msq->q_rtime = 0;
 	msq->q_ctime = ktime_get_real_seconds();
 	msq->q_cbytes = msq->q_qnum = 0;
-	msq->q_qbytes = ns->msg_ctlmnb;
+	msq->q_qbytes = droid_lkm_msg_ctlmnb(ns);
 	msq->q_lspid = msq->q_lrpid = NULL;
 	INIT_LIST_HEAD(&msq->q_messages);
 	INIT_LIST_HEAD(&msq->q_receivers);
 	INIT_LIST_HEAD(&msq->q_senders);
 
 	/* ipc_addid() locks msq upon success. */
-	retval = ipc_addid(&msg_ids(ns), &msq->q_perm, ns->msg_ctlmni);
+	retval = ipc_addid(&msg_ids(ns), &msq->q_perm, droid_lkm_msg_ctlmni(ns));
 	if (retval < 0) {
 		ipc_rcu_putref(&msq->q_perm, msg_rcu_free);
 		return retval;
@@ -561,7 +575,7 @@ static int msgctl_down(struct ipc_namespace *ns, int msqid, int cmd,
 	{
 		DEFINE_WAKE_Q(wake_q);
 
-		if (msg_qbytes > ns->msg_ctlmnb &&
+		if (msg_qbytes > droid_lkm_msg_ctlmnb(ns) &&
 		    !capable(CAP_SYS_RESOURCE)) {
 			err = -EPERM;
 			goto out_unlock1;
@@ -620,9 +634,9 @@ static int msgctl_info(struct ipc_namespace *ns, int msqid,
 		return err;
 
 	memset(msginfo, 0, sizeof(*msginfo));
-	msginfo->msgmni = ns->msg_ctlmni;
-	msginfo->msgmax = ns->msg_ctlmax;
-	msginfo->msgmnb = ns->msg_ctlmnb;
+	msginfo->msgmni = droid_lkm_msg_ctlmni(ns);
+	msginfo->msgmax = droid_lkm_msg_ctlmax(ns);
+	msginfo->msgmnb = droid_lkm_msg_ctlmnb(ns);
 	msginfo->msgssz = MSGSSZ;
 	/*
 	 * MSGSEG is a ternary whose rejected arm does not fit unsigned short, and
@@ -989,7 +1003,8 @@ static long do_msgsnd(int msqid, long mtype, void __user *mtext,
 
 	ns = droid_lkm_ipcns_current();
 
-	if (msgsz > ns->msg_ctlmax || (long) msgsz < 0 || msqid < 0)
+	if (msgsz > (long)droid_lkm_msg_ctlmax(ns) || (long) msgsz < 0 ||
+	    msqid < 0)
 		return -EINVAL;
 	if (mtype < 1)
 		return -EINVAL;
@@ -1245,7 +1260,8 @@ static long do_msgrcv(int msqid, void __user *buf, size_t bufsz, long msgtyp, in
 	if (msgflg & MSG_COPY) {
 		if ((msgflg & MSG_EXCEPT) || !(msgflg & IPC_NOWAIT))
 			return -EINVAL;
-		copy = prepare_copy(buf, min_t(size_t, bufsz, ns->msg_ctlmax));
+		copy = prepare_copy(buf, min_t(size_t, bufsz,
+					   droid_lkm_msg_ctlmax(ns)));
 		if (IS_ERR(copy))
 			return PTR_ERR(copy);
 	}
@@ -1440,14 +1456,14 @@ int msg_init_ns(struct ipc_namespace *ns)
 {
 	int ret;
 
-	ns->msg_ctlmax = MSGMAX;
-	ns->msg_ctlmnb = MSGMNB;
-	ns->msg_ctlmni = MSGMNI;
+	droid_lkm_msg_ctlmax(ns) = MSGMAX;
+	droid_lkm_msg_ctlmnb(ns) = MSGMNB;
+	droid_lkm_msg_ctlmni(ns) = MSGMNI;
 
 	ret = droid_lkm_msg_acct_init(ns);
 	if (ret)
 		return ret;
-	ipc_init_ids(&ns->ids[IPC_MSG_IDS]);
+	ipc_init_ids(&msg_ids(ns));
 	return 0;
 }
 

@@ -61,6 +61,7 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT,
 	DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT,
 	DROID_LKM_F_IPC_NS_SEM_CTLS,
+	DROID_LKM_F_IPC_NS_USED_SEMS,
 	DROID_LKM_F_IPC_NS_MSG_CTLMAX,
 	DROID_LKM_F_IPC_NS_MSG_CTLMNB,
 	DROID_LKM_F_IPC_NS_MSG_CTLMNI,
@@ -68,6 +69,8 @@ enum droid_lkm_field_id {
 	DROID_LKM_F_IPC_NS_SHM_CTLALL,
 	DROID_LKM_F_IPC_NS_SHM_CTLMNI,
 	DROID_LKM_F_IPC_NS_SHM_RMID_FORCED,
+	DROID_LKM_F_IPC_NS_SHM_TOT,
+	DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 	// per ns sysctl sets exist from 6.1 on
 	DROID_LKM_F_IPC_NS_MQ_SET,
@@ -82,6 +85,7 @@ enum droid_lkm_field_id {
 enum droid_lkm_type_id {
 	DROID_LKM_T_UPID,
 	DROID_LKM_T_PID_NAMESPACE,
+	DROID_LKM_T_IPC_IDS,
 	DROID_LKM_TYPE_COUNT
 };
 
@@ -95,6 +99,12 @@ u32 droid_lkm_pidns_size(void);
 
 // running kernel sizeof or 0 when refused
 u32 droid_lkm_layout_type_size(enum droid_lkm_type_id id);
+
+/*
+ * the table is the only way a namespace member is reached, so verifying the
+ * ones the port asks for covers every access
+ */
+bool droid_lkm_layout_ipcns_ok(u8 need);
 bool droid_lkm_layout_type_ok(enum droid_lkm_type_id id);
 
 // running kernel offset or 0 when refused

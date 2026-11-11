@@ -20,13 +20,30 @@
 #endif
 
 // build offset kept so a kernel that disagrees with the headers is visible
+// _need is the port that asks for the field
+#define DROID_LKM_FIELD_N(_id, _type, _member, _need)                          \
+	[_id] = { .type = #_type, .member = #_member,                                 \
+		  .build = offsetof(struct _type, _member),                                  \
+		  .build_size = sizeof(((struct _type *)0)->_member),                        \
+		  .need = _need },
+// an array has no member width, its size is the stride
+#define DROID_LKM_FIELD_ARR_N(_id, _type, _member, _need)                      \
+	[_id] = { .type = #_type, .member = #_member,                                 \
+		  .build = offsetof(struct _type, _member), .need = _need },
 #define DROID_LKM_FIELD(_id, _type, _member)                                   \
-	[_id] = { .type = #_type, .member = #_member,                          \
-		  .build = offsetof(struct _type, _member) },
+	DROID_LKM_FIELD_N(_id, _type, _member, DS_COMPAT_NEED_ANY)
+#define DROID_LKM_FIELD_SYSV(_id, _type, _member)                              \
+	DROID_LKM_FIELD_N(_id, _type, _member, DS_COMPAT_NEED_SYSV)
+#define DROID_LKM_FIELD_MQ(_id, _type, _member)                                \
+	DROID_LKM_FIELD_N(_id, _type, _member, DS_COMPAT_NEED_MQUEUE)
+#define DROID_LKM_FIELD_ARR(_id, _type, _member)                               \
+	DROID_LKM_FIELD_ARR_N(_id, _type, _member, DS_COMPAT_NEED_ANY)
+#define DROID_LKM_FIELD_SYSV_ARR(_id, _type, _member)                          \
+	DROID_LKM_FIELD_ARR_N(_id, _type, _member, DS_COMPAT_NEED_SYSV)
 
 static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_IDS, ipc_namespace, ids)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_MNT, ipc_namespace, mq_mnt)
+	DROID_LKM_FIELD_ARR(DROID_LKM_F_IPC_NS_IDS, ipc_namespace, ids)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_MNT, ipc_namespace, mq_mnt)
 	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_USER_NS, ipc_namespace, user_ns)
 	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_UCOUNTS, ipc_namespace, ucounts)
 	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_NS, ipc_namespace, ns)
@@ -65,27 +82,30 @@ static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 	DROID_LKM_FIELD(DROID_LKM_F_SEQ_FILE_COUNT, seq_file, count)
 	DROID_LKM_FIELD(DROID_LKM_F_SEQ_FILE_SIZE, seq_file, size)
 	DROID_LKM_FIELD(DROID_LKM_F_PID_LEVEL, pid, level)
-	DROID_LKM_FIELD(DROID_LKM_F_PID_NUMBERS, pid, numbers)
+	DROID_LKM_FIELD_ARR(DROID_LKM_F_PID_NUMBERS, pid, numbers)
 	DROID_LKM_FIELD(DROID_LKM_F_UPID_NR, upid, nr)
 	DROID_LKM_FIELD(DROID_LKM_F_UPID_NS, upid, ns)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX, ipc_namespace, mq_queues_max)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_MSG_MAX, ipc_namespace, mq_msg_max)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX, ipc_namespace, mq_msgsize_max)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT, ipc_namespace, mq_msg_default)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT, ipc_namespace, mq_msgsize_default)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_SEM_CTLS, ipc_namespace, sem_ctls)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MSG_CTLMAX, ipc_namespace, msg_ctlmax)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MSG_CTLMNB, ipc_namespace, msg_ctlmnb)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MSG_CTLMNI, ipc_namespace, msg_ctlmni)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_SHM_CTLMAX, ipc_namespace, shm_ctlmax)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_SHM_CTLALL, ipc_namespace, shm_ctlall)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_SHM_CTLMNI, ipc_namespace, shm_ctlmni)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_SHM_RMID_FORCED, ipc_namespace, shm_rmid_forced)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_QUEUES_MAX, ipc_namespace, mq_queues_max)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_MSG_MAX, ipc_namespace, mq_msg_max)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_MAX, ipc_namespace, mq_msgsize_max)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_MSG_DEFAULT, ipc_namespace, mq_msg_default)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_MSGSIZE_DEFAULT, ipc_namespace, mq_msgsize_default)
+	DROID_LKM_FIELD_SYSV_ARR(DROID_LKM_F_IPC_NS_SEM_CTLS, ipc_namespace, sem_ctls)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_USED_SEMS, ipc_namespace, used_sems)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_MSG_CTLMAX, ipc_namespace, msg_ctlmax)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_MSG_CTLMNB, ipc_namespace, msg_ctlmnb)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_MSG_CTLMNI, ipc_namespace, msg_ctlmni)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_SHM_CTLMAX, ipc_namespace, shm_ctlmax)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_SHM_CTLALL, ipc_namespace, shm_ctlall)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_SHM_CTLMNI, ipc_namespace, shm_ctlmni)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_SHM_RMID_FORCED, ipc_namespace, shm_rmid_forced)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_SHM_TOT, ipc_namespace, shm_tot)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_QUEUES_COUNT, ipc_namespace, mq_queues_count)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_SET, ipc_namespace, mq_set)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_IPC_SET, ipc_namespace, ipc_set)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_MQ_SYSCTLS, ipc_namespace, mq_sysctls)
-	DROID_LKM_FIELD(DROID_LKM_F_IPC_NS_IPC_SYSCTLS, ipc_namespace, ipc_sysctls)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_SET, ipc_namespace, mq_set)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_IPC_SET, ipc_namespace, ipc_set)
+	DROID_LKM_FIELD_MQ(DROID_LKM_F_IPC_NS_MQ_SYSCTLS, ipc_namespace, mq_sysctls)
+	DROID_LKM_FIELD_SYSV(DROID_LKM_F_IPC_NS_IPC_SYSCTLS, ipc_namespace, ipc_sysctls)
 #endif
 };
 
@@ -94,6 +114,7 @@ static struct ds_compat_field droid_lkm_fields[DROID_LKM_FIELD_COUNT] = {
 static struct ds_compat_type droid_lkm_types[DROID_LKM_TYPE_COUNT] = {
 	DROID_LKM_TYPE(DROID_LKM_T_UPID, upid)
 	DROID_LKM_TYPE(DROID_LKM_T_PID_NAMESPACE, pid_namespace)
+	DROID_LKM_TYPE(DROID_LKM_T_IPC_IDS, ipc_ids)
 };
 
 static struct ds_compat_layout droid_lkm_layout = {
@@ -263,6 +284,29 @@ static bool droid_lkm_layout_required_ok(void)
 	if (!droid_lkm_layout_type_verified(DROID_LKM_T_UPID) ||
 	    !droid_lkm_layout_type_verified(DROID_LKM_T_PID_NAMESPACE)) {
 		pr_info("[droid_lkm] layout: required type size is not verified\n");
+		return false;
+	}
+	return true;
+}
+
+bool droid_lkm_layout_ipcns_ok(u8 need)
+{
+	unsigned int i;
+
+	if (!droid_lkm_layout_type_ok(DROID_LKM_T_IPC_IDS))
+		return false;
+
+	for (i = 0; i < DROID_LKM_FIELD_COUNT; i++) {
+		const struct ds_compat_field *f = &droid_lkm_fields[i];
+
+		if (strcmp(f->type, "ipc_namespace"))
+			continue;
+		if (f->need != DS_COMPAT_NEED_ANY && f->need != need)
+			continue;
+		if (droid_lkm_layout_ok(i))
+			continue;
+		pr_info("[droid_lkm] layout: %s.%s is not verified\n",
+			f->type, f->member);
 		return false;
 	}
 	return true;
