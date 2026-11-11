@@ -9,6 +9,7 @@
 #include "core.h"
 #include "hk.h"
 #include "misc.h"
+#include "misc_layout.h"
 #include "misc_ksym.h"
 #include "misc_proc.h"
 #include "xt_reg.h"
@@ -19,8 +20,9 @@ bool droid_lkm_misc_verbose;
 
 static unsigned long __nocfi droid_lkm_misc_hk_resolve(const char *name)
 {
-	return kallrecon_klp ? kallrecon_klp(name) : 0;
+	return droid_lkm_misc_sym(name);
 }
+
 
 static const struct hk_cfg droid_lkm_misc_hk_cfg = {
 	.resolve = droid_lkm_misc_hk_resolve,
@@ -71,12 +73,14 @@ MODULE_PARM_DESC(release, "write 1 to drop the devtmpfs internal mount before un
 
 static int __init droid_lkm_misc_init(void)
 {
+	bool trusted;
 	int ret;
 
-	find_kallsyms_base();
-	if (!klnum_val || !kallrecon_klp) {
-		droid_lkm_misc_err("kallsyms recovery failed\n");
-		return -ENODATA;
+	/* the shared prefix check is what keeps a shim from resolving to itself */
+	ret = ds_compat_init("droid_lkm_misc", "droid_lkm_");
+	if (ret) {
+		droid_lkm_misc_err("kallsyms recovery failed: %d\n", ret);
+		return ret;
 	}
 
 	droid_lkm_misc_info("loaded\n");
@@ -95,6 +99,11 @@ static int __init droid_lkm_misc_init(void)
 	}
 	droid_lkm_misc_hk_up = true;
 
+	/* an offset this build cannot vouch for is not dereferenced: userns stays off */
+	droid_lkm_misc_layout_init();
+	trusted = droid_lkm_misc_layout_trusted();
+	droid_lkm_misc_layout_report();
+
 	ret = droid_lkm_misc_proc_init();
 	if (ret)
 		droid_lkm_misc_warn("control plane unavailable: %d\n", ret);
@@ -102,7 +111,7 @@ static int __init droid_lkm_misc_init(void)
 	if (droid_lkm_misc_xt_enable) {
 		ret = droid_lkm_misc_xt_init();
 		if (ret)
-			return ret;
+			goto err_proc;
 	} else {
 		droid_lkm_misc_report("xt", "off", "xt=0");
 	}
@@ -116,16 +125,27 @@ static int __init droid_lkm_misc_init(void)
 	}
 
 	if (droid_lkm_misc_userns_enable) {
-		ret = droid_lkm_userns_init();
-		if (ret)
-			droid_lkm_misc_warn("userns unavailable: %d\n", ret);
-		else
+		if (!trusted) {
+			droid_lkm_misc_report("userns", "off",
+					      "kernel layout not verified");
+		} else if (droid_lkm_userns_init()) {
+			droid_lkm_misc_warn("userns unavailable\n");
+		} else {
 			droid_lkm_misc_userns_up = true;
+		}
 	} else {
 		droid_lkm_misc_report("userns", "off", "userns=0");
 	}
 
 	return 0;
+
+err_proc:
+	droid_lkm_misc_proc_exit();
+	if (droid_lkm_misc_hk_up) {
+		hk_exit();
+		droid_lkm_misc_hk_up = false;
+	}
+	return ret;
 }
 
 static void __exit droid_lkm_misc_exit(void)

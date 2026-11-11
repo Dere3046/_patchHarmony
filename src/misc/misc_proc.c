@@ -35,9 +35,25 @@ static struct {
 	char name[DROID_LKM_MISC_REPORT_NAME];
 	char state[DROID_LKM_MISC_REPORT_STATE];
 	char detail[DROID_LKM_MISC_REPORT_DETAIL];
+	void (*live)(char *buf, size_t size);
 } droid_lkm_misc_report_slots[DROID_LKM_MISC_REPORT_SLOTS];
 
 static DEFINE_MUTEX(droid_lkm_misc_report_lock);
+
+/* the slot for this name, the first free one or the one already holding it. caller holds the lock */
+static int droid_lkm_misc_report_claim(const char *name)
+{
+	unsigned int i;
+
+	for (i = 0; i < DROID_LKM_MISC_REPORT_SLOTS; i++) {
+		if (droid_lkm_misc_report_slots[i].used &&
+		    strcmp(droid_lkm_misc_report_slots[i].name, name))
+			continue;
+		return i;
+	}
+
+	return -1;
+}
 
 static struct proc_dir_entry *droid_lkm_misc_dir;
 static struct proc_dir_entry *(*droid_lkm_misc_proc_mkdir)(const char *name,
@@ -50,33 +66,56 @@ static int (*droid_lkm_misc_proc_remove_subtree)(const char *name,
 
 void droid_lkm_misc_report(const char *name, const char *state, const char *detail)
 {
-	unsigned int i;
+	int i;
 
 	if (!name || !state)
 		return;
 
 	mutex_lock(&droid_lkm_misc_report_lock);
 
-	for (i = 0; i < DROID_LKM_MISC_REPORT_SLOTS; i++) {
-		if (droid_lkm_misc_report_slots[i].used &&
-		    strcmp(droid_lkm_misc_report_slots[i].name, name))
-			continue;
-		break;
-	}
-
-	if (i == DROID_LKM_MISC_REPORT_SLOTS) {
+	i = droid_lkm_misc_report_claim(name);
+	if (i < 0) {
 		droid_lkm_misc_warn("report full, dropped: %s\n", name);
 		mutex_unlock(&droid_lkm_misc_report_lock);
 		return;
 	}
 
 	droid_lkm_misc_report_slots[i].used = true;
+	droid_lkm_misc_report_slots[i].live = NULL;
 	strscpy(droid_lkm_misc_report_slots[i].name, name,
 		sizeof(droid_lkm_misc_report_slots[i].name));
 	strscpy(droid_lkm_misc_report_slots[i].state, state,
 		sizeof(droid_lkm_misc_report_slots[i].state));
 	strscpy(droid_lkm_misc_report_slots[i].detail, detail ? detail : "",
 		sizeof(droid_lkm_misc_report_slots[i].detail));
+
+	mutex_unlock(&droid_lkm_misc_report_lock);
+}
+
+void droid_lkm_misc_report_live(const char *name, const char *state,
+				void (*live)(char *buf, size_t size))
+{
+	int i;
+
+	if (!name || !state || !live)
+		return;
+
+	mutex_lock(&droid_lkm_misc_report_lock);
+
+	i = droid_lkm_misc_report_claim(name);
+	if (i < 0) {
+		droid_lkm_misc_warn("report full, dropped: %s\n", name);
+		mutex_unlock(&droid_lkm_misc_report_lock);
+		return;
+	}
+
+	droid_lkm_misc_report_slots[i].used = true;
+	droid_lkm_misc_report_slots[i].live = live;
+	strscpy(droid_lkm_misc_report_slots[i].name, name,
+		sizeof(droid_lkm_misc_report_slots[i].name));
+	strscpy(droid_lkm_misc_report_slots[i].state, state,
+		sizeof(droid_lkm_misc_report_slots[i].state));
+	droid_lkm_misc_report_slots[i].detail[0] = '\0';
 
 	mutex_unlock(&droid_lkm_misc_report_lock);
 }
@@ -148,21 +187,33 @@ loff_t droid_lkm_misc_proc_llseek(struct file *file, loff_t offset, int whence)
 
 static int droid_lkm_misc_report_text(char *buf, int size)
 {
+	char detail[DROID_LKM_MISC_REPORT_DETAIL];
 	int len = 0;
 	unsigned int i;
 
 	mutex_lock(&droid_lkm_misc_report_lock);
 
 	for (i = 0; i < DROID_LKM_MISC_REPORT_SLOTS; i++) {
+		const char *d;
+
 		if (!droid_lkm_misc_report_slots[i].used)
 			continue;
 		if (len >= size - 1)
 			break;
 
+		/* a live detail is produced here rather than stored, for counts that move after init */
+		if (droid_lkm_misc_report_slots[i].live) {
+			detail[0] = '\0';
+			droid_lkm_misc_report_slots[i].live(detail, sizeof(detail));
+			d = detail;
+		} else {
+			d = droid_lkm_misc_report_slots[i].detail;
+		}
+
 		len += scnprintf(buf + len, size - len, "%-24s %-14s %s\n",
 			droid_lkm_misc_report_slots[i].name,
 			droid_lkm_misc_report_slots[i].state,
-			droid_lkm_misc_report_slots[i].detail);
+			d);
 	}
 
 	mutex_unlock(&droid_lkm_misc_report_lock);
