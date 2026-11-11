@@ -701,7 +701,11 @@ void droid_lkm_pidns_queue_zap(struct pid_namespace *ns)
 	wake_up_interruptible(&droid_lkm_zap_wq);
 }
 
-void droid_lkm_pidns_exit_cleanup(struct task_struct *task)
+/*
+ * pre 6.1 CFI rejects the indirect call to disable_pid_allocation, keep the
+ * site unchecked
+ */
+__nocfi noinline void droid_lkm_pidns_exit_cleanup(struct task_struct *task)
 {
 	struct pid_namespace *ns = task_active_pid_ns(task);
 

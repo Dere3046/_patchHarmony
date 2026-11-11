@@ -94,8 +94,8 @@ static struct ctl_table mq_sysctls[] = {
 /* the sentinel is not an entry */
 #define DROID_LKM_MQ_SYSCTL_COUNT	(ARRAY_SIZE(mq_sysctls) - 1)
 
-// ipc_namespace members go through the layout table
-// a build offset is what the 6.12 device crashed on
+// ipc_namespace offsets follow the allocator: the kernel's own namespace needs
+// the live offset, the module's own needs the build offset
 #define DROID_LKM_NS_MQ_SET(_ns)                                               \
 	((struct ctl_table_set *)((char *)(_ns) +                              \
 			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_MQ_SET)))
@@ -205,9 +205,11 @@ bool droid_lkm_setup_mq_sysctls(struct ipc_namespace *ns)
 
 	droid_lkm_sysctl_setup_set(DROID_LKM_NS_MQ_SET(ns), &set_root, set_is_seen);
 
-	tbl = kmemdup(mq_sysctls,
-		      DROID_LKM_MQ_SYSCTL_COUNT * sizeof(mq_sysctls[0]),
-		      GFP_KERNEL);
+	/*
+	 * below 6.6 the table ends at the empty entry, the count is only what
+	 * 6.6 and up read
+	 */
+	tbl = kmemdup(mq_sysctls, sizeof(mq_sysctls), GFP_KERNEL);
 	if (tbl) {
 		int i;
 

@@ -274,8 +274,8 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
 
-// ipc_namespace members go through the layout table
-// the 6.12 device crashed on a set pointer built from a build offset
+// ipc_namespace offsets follow the allocator: the kernel's own namespace needs
+// the live offset, the module's own needs the build offset
 #define DROID_LKM_NS_IPC_SET(_ns)                                              \
 	((struct ctl_table_set *)((char *)(_ns) +                              \
 			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_IPC_SET)))
@@ -385,8 +385,11 @@ __nocfi noinline bool droid_lkm_ipc_sysctls_setup(struct ipc_namespace *ns)
 				      &droid_lkm_ipc_set_root,
 				      droid_lkm_ipc_set_is_seen);
 
-	tbl = kmemdup(droid_lkm_ipc_sysctls,
-		      DROID_LKM_IPC_SYSCTL_COUNT * sizeof(droid_lkm_ipc_sysctls[0]),
+	/*
+	 * below 6.6 the table ends at the empty entry, the count is only what
+	 * 6.6 and up read
+	 */
+	tbl = kmemdup(droid_lkm_ipc_sysctls, sizeof(droid_lkm_ipc_sysctls),
 		      GFP_KERNEL);
 	if (!tbl) {
 		droid_lkm_retire_sysctl_set_fn(DROID_LKM_NS_IPC_SET(ns));

@@ -521,9 +521,11 @@ static int (*droid_lkm_check_unshare_flags_fn)(unsigned long flags);
 static struct ds_hook droid_lkm_switch_hook;
 static struct ds_hook droid_lkm_exit_ns_hook;
 static struct ds_hook droid_lkm_free_nsproxy_hook;
+static struct ds_hook droid_lkm_do_exit_hook;
 static void (*droid_lkm_switch_orig)(struct task_struct *p, struct nsproxy *new);
 static void (*droid_lkm_exit_ns_orig)(struct task_struct *p);
 static void (*droid_lkm_free_nsproxy_orig)(struct nsproxy *ns);
+static void (*droid_lkm_do_exit_orig)(long code);
 
 static void droid_lkm_nsproxy_hold(struct nsproxy *nsp)
 {
@@ -597,6 +599,18 @@ DROID_LKM_ENTRY __nocfi noinline void droid_lkm_exit_ns_wrap(struct task_struct 
 		droid_lkm_nsproxy_drop(ipc);
 }
 
+/*
+ * a kernel that inlines exit_task_namespaces() into do_exit() never reaches the
+ * hook above, which is what 5.15 does: the fake namespace then keeps the dying
+ * task as its child_reaper and do_exit walks into the zap stub. do_exit itself
+ * is never inlined, so the cleanup is repeated here.
+ */
+DROID_LKM_ENTRY __nocfi noinline void droid_lkm_do_exit_wrap(long code)
+{
+	droid_lkm_pidns_exit_cleanup(current);
+	droid_lkm_do_exit_orig(code);
+}
+
 DROID_LKM_ENTRY __nocfi noinline void droid_lkm_free_nsproxy_wrap(struct nsproxy *ns)
 {
 #ifdef DROID_LKM_NATIVE_PID
@@ -653,6 +667,20 @@ static int droid_lkm_nsproxy_release_hooks_install(void)
 	}
 	droid_lkm_exit_ns_orig =
 		(typeof(droid_lkm_exit_ns_orig))droid_lkm_exit_ns_hook.orig;
+
+	/*
+	 * not critical: a kernel that calls exit_task_namespaces() still gets the
+	 * cleanup from the hook above, this one only covers the inlined case
+	 */
+	ret = ds_hook_install(&droid_lkm_do_exit_hook, "do_exit",
+			      "droid_lkm_do_exit_wrap");
+	if (ret) {
+		droid_lkm_warn("do_exit hook failed: %d, cleanup stays on "
+			       "exit_task_namespaces only\n", ret);
+	} else {
+		droid_lkm_do_exit_orig =
+			(typeof(droid_lkm_do_exit_orig))droid_lkm_do_exit_hook.orig;
+	}
 
 	if (droid_lkm_pidns_nsproxy_enabled()) {
 		ret = ds_hook_install(&droid_lkm_free_nsproxy_hook, "free_nsproxy",

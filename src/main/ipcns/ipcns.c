@@ -16,7 +16,6 @@
 #include <linux/fs.h>
 #include <linux/user_namespace.h>
 #include <linux/sched/task.h>
-#include <linux/rhashtable.h>
 #include <linux/idr.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -106,12 +105,8 @@ static void droid_lkm_ipcns_destroy_ids(struct ipc_namespace *ns)
 		ns->mq_mnt = NULL;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(ns->ids); i++) {
-		struct ipc_ids *ids = &ns->ids[i];
-
-		rhashtable_destroy((struct rhashtable *)&ids->key_ht);
-		idr_destroy(&ids->ipcs_idr);
-	}
+	for (i = 0; i < ARRAY_SIZE(ns->ids); i++)
+		idr_destroy(&ns->ids[i].ipcs_idr);
 }
 
 __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
