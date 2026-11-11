@@ -97,15 +97,15 @@ static struct ctl_table mq_sysctls[] = {
 // ipc_namespace members go through the layout table
 // a build offset is what the 6.12 device crashed on
 #define DROID_LKM_NS_MQ_SET(_ns)                                               \
-	((struct ctl_table_set *)droid_lkm_layout_ptr((_ns),                   \
-			DROID_LKM_F_IPC_NS_MQ_SET))
+	((struct ctl_table_set *)((char *)(_ns) +                              \
+			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_MQ_SET)))
 #define DROID_LKM_NS_MQ_SYSCTLS(_ns)                                           \
-	((struct ctl_table_header **)droid_lkm_layout_ptr((_ns),               \
-			DROID_LKM_F_IPC_NS_MQ_SYSCTLS))
+	((struct ctl_table_header **)((char *)(_ns) +                          \
+			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_MQ_SYSCTLS)))
 #define DROID_LKM_NS_FIELD(_ns, _id)                                           \
-	((void *)droid_lkm_layout_ptr((_ns), (_id)))
+	((void *)((char *)(_ns) + droid_lkm_ipcns_off(_id)))
 #define DROID_LKM_INIT_NS_FIELD(_id)                                           \
-	((void *)((char *)&init_ipc_ns + droid_lkm_layout_off(_id)))
+	((void *)((char *)&init_ipc_ns + droid_lkm_layout_build_off(_id)))
 
 static bool droid_lkm_mq_sysctl_fields_ok(void)
 {
@@ -137,7 +137,7 @@ static void mq_set_ownership(struct ctl_table_header *head,
 {
 	struct ipc_namespace *ns =
 		(struct ipc_namespace *)((char *)head->set -
-			droid_lkm_layout_off(DROID_LKM_F_IPC_NS_MQ_SET));
+			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_MQ_SET));
 
 	struct user_namespace *user_ns = *(struct user_namespace **)
 		DROID_LKM_NS_FIELD(ns, DROID_LKM_F_IPC_NS_USER_NS);

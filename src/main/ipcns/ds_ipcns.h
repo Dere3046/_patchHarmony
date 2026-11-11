@@ -11,6 +11,8 @@
 #include <linux/ns_common.h>
 #include <linux/proc_ns.h>
 
+#include "ds_ti.h"
+
 extern const struct proc_ns_operations droid_lkm_ipcns_ops;
 
 int droid_lkm_ipcns_init(void);
@@ -40,5 +42,7 @@ bool droid_lkm_ipcns_in_use(struct ipc_namespace *ns);
 
 struct ipc_namespace *droid_lkm_ipcns_current(void);
 struct ipc_namespace *droid_lkm_ipcns_task_ns(struct task_struct *task);
+
+u32 droid_lkm_ipcns_off(enum droid_lkm_field_id id);
 
 #endif /* DROID_LKM_IPCNS_H */

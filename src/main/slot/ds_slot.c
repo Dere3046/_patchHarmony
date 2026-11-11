@@ -861,6 +861,43 @@ __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *
 	return 0;
 }
 
+/* a resolved function has to sit inside the kernel image, the same range the
+ * text patch path trusts; without the bounds the range test is skipped */
+static bool droid_lkm_kernel_text_addr(unsigned long addr)
+{
+	if (!droid_lkm_ks.text_start || !droid_lkm_ks.text_end)
+		return true;
+
+	return addr >= droid_lkm_ks.text_start && addr < droid_lkm_ks.text_end;
+}
+
+/*
+ * the kernel keeps check_unshare_flags static and never takes its address, so
+ * BTI compiled it without a landing pad and an indirect branch into it faults.
+ * a return is not checked by BTI: load the return address, return into the
+ * function, and the function's own paciasp/autiasp brings the call back
+ */
+static __nocfi noinline int droid_lkm_call_flag_check(int (*fn)(unsigned long),
+						      unsigned long flags)
+{
+	register unsigned long arg asm("x0") = flags;
+	register unsigned long target asm("x8") = (unsigned long)fn;
+
+	asm volatile(
+		"stp	x29, x30, [sp, #-16]!\n"
+		"mov	x29, sp\n"
+		"adr	x30, 1f\n"
+		"ret	x8\n"
+		"1:\n"
+		"ldp	x29, x30, [sp], #16\n"
+		: "+r"(arg)
+		: "r"(target)
+		: "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x9", "x10", "x11",
+		  "x12", "x13", "x14", "x15", "x16", "x17", "cc", "memory");
+
+	return (int)arg;
+}
+
 static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 {
 	unsigned long f = flags;
@@ -874,7 +911,8 @@ static __nocfi noinline bool droid_lkm_unshare_precheck(unsigned long flags)
 	if (f & CLONE_NEWNS)
 		f |= CLONE_FS;
 
-	if (droid_lkm_check_unshare_flags_fn && droid_lkm_check_unshare_flags_fn(f))
+	if (droid_lkm_check_unshare_flags_fn &&
+	    droid_lkm_call_flag_check(droid_lkm_check_unshare_flags_fn, f))
 		return false;
 
 	if ((flags & DROID_LKM_NS_ALL) &&
@@ -999,6 +1037,13 @@ static int droid_lkm_nsproxy_hook_install(void)
 
 	droid_lkm_check_unshare_flags_fn =
 		(int (*)(unsigned long))droid_lkm_sym("check_unshare_flags");
+	if (droid_lkm_check_unshare_flags_fn &&
+	    !droid_lkm_kernel_text_addr(
+		    (unsigned long)droid_lkm_check_unshare_flags_fn)) {
+		droid_lkm_warn("check_unshare_flags %lx outside the image\n",
+			       (unsigned long)droid_lkm_check_unshare_flags_fn);
+		droid_lkm_check_unshare_flags_fn = NULL;
+	}
 
 	ret = ds_hook_install_critical(&droid_lkm_cnn_hook,
 					"create_new_namespaces",

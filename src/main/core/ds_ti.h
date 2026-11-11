@@ -100,6 +100,7 @@ bool droid_lkm_layout_type_ok(enum droid_lkm_type_id id);
 // running kernel offset or 0 when refused
 // callers check droid_lkm_layout_ok() first
 u32 droid_lkm_layout_off(enum droid_lkm_field_id id);
+u32 droid_lkm_layout_build_off(enum droid_lkm_field_id id);
 bool droid_lkm_layout_ok(enum droid_lkm_field_id id);
 
 // NULL when the field is refused

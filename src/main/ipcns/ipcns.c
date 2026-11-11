@@ -67,6 +67,27 @@ static const struct proc_ns_operations *droid_lkm_ipcns_neutral_ops;
 
 static struct nsproxy *droid_lkm_init_nsproxy;
 
+/*
+ * offsets follow the allocator: the module's own namespaces carry the build
+ * layout, only a namespace the kernel allocated follows the running kernel
+ */
+u32 droid_lkm_ipcns_off(enum droid_lkm_field_id id)
+{
+	if (droid_lkm_ipcns_kernel_owned)
+		return droid_lkm_layout_off(id);
+
+	return droid_lkm_layout_build_off(id);
+}
+
+static void droid_lkm_ipcns_trace(const char *where, struct ipc_namespace *ns)
+{
+	if (droid_lkm_verbose)
+		droid_lkm_dbg("ipcns %s %px user_ns %px\n", where, ns,
+			      ns->user_ns);
+	else if (!ns->user_ns)
+		droid_lkm_warn("ipcns %s %px has no user_ns\n", where, ns);
+}
+
 static __nocfi noinline void ds_free_ipc_ns(struct ipc_namespace *ns);
 
 static struct ipc_namespace *to_ipc_ns(struct ns_common *ns)
@@ -173,6 +194,7 @@ out_kernel_ns:
 	/* same ownership rule as the fake pid namespace, see droid_lkm_pidns_create */
 	ns->user_ns = droid_lkm_task_cred(current)->user_ns;
 	droid_lkm_get_user_ns(ns->user_ns);
+	droid_lkm_ipcns_trace("create", ns);
 	ns->ucounts = NULL;
 
 	err = msg_init_ns(ns);
@@ -388,6 +410,7 @@ static int droid_lkm_ipcns_install(struct nsset *nsset, struct ns_common *new)
 
 	droid_lkm_dbg("setns(ipc): %s[%d] -> ns=%p\n",
 	       droid_lkm_task_comm(current), droid_lkm_task_pid(current), ns);
+	droid_lkm_ipcns_trace("setns", ns);
 
 	if (!ns_capable(ns->user_ns, CAP_SYS_ADMIN) ||
 	    !ns_capable(nsset->cred->user_ns, CAP_SYS_ADMIN))
@@ -509,6 +532,7 @@ int droid_lkm_ipcns_init(void)
 			     CLONE_NEWIPC);
 	refcount_set(droid_lkm_ipcns_refcount(droid_lkm_ipcns_host), 1);
 	droid_lkm_ipcns_host->user_ns = droid_lkm_ks.init_user_ns;
+	droid_lkm_ipcns_trace("host", droid_lkm_ipcns_host);
 
 	droid_lkm_ipcns_init_entry.ns = droid_lkm_ipcns_host;
 	INIT_LIST_HEAD(&droid_lkm_ipcns_init_entry.node);
