@@ -255,7 +255,7 @@ static int dlc_ghost_build(void)
 	// init_task.thread_pid is init_struct_pid nr 0 so the vnr helpers agree
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_PID) = 0;
 	*(pid_t *)dlc_ghost_at(DLC_GHOST_F_TGID) = 0;
-	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), 1000);
+	refcount_set((refcount_t *)dlc_ghost_at(DLC_GHOST_F_USAGE), 0x40000000);
 	smp_wmb();
 	WRITE_ONCE(dlc_ghost_ready, true);
 	return 0;

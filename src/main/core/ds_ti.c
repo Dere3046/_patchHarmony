@@ -328,6 +328,14 @@ void droid_lkm_layout_show(struct seq_file *m)
 	}
 }
 
+u32 droid_lkm_layout_build_off(enum droid_lkm_field_id id)
+{
+	if (id >= DROID_LKM_FIELD_COUNT)
+		return 0;
+
+	return droid_lkm_fields[id].build;
+}
+
 u32 droid_lkm_layout_off(enum droid_lkm_field_id id)
 {
 	if (id >= DROID_LKM_FIELD_COUNT)

@@ -57,9 +57,9 @@ static bool droid_lkm_ipc_sysctls_ready;
  * pointer is already the right one.
  */
 #define DROID_LKM_NS_FIELD(_ns, _id)                                           \
-	((void *)droid_lkm_layout_ptr((_ns), (_id)))
+	((void *)((char *)(_ns) + droid_lkm_ipcns_off(_id)))
 #define DROID_LKM_INIT_NS_FIELD(_id)                                           \
-	((void *)((char *)&init_ipc_ns + droid_lkm_layout_off(_id)))
+	((void *)((char *)&init_ipc_ns + droid_lkm_layout_build_off(_id)))
 
 static inline void *droid_lkm_ipc_data(DROID_LKM_CTL_TABLE *table)
 {
@@ -76,7 +76,7 @@ static struct ipc_namespace *droid_lkm_ipc_ns_of(void *field,
 						 enum droid_lkm_field_id id)
 {
 	return (struct ipc_namespace *)((char *)field -
-					droid_lkm_layout_off(id));
+					droid_lkm_ipcns_off(id));
 }
 
 /*
@@ -277,11 +277,11 @@ static struct ctl_table droid_lkm_ipc_sysctls[] = {
 // ipc_namespace members go through the layout table
 // the 6.12 device crashed on a set pointer built from a build offset
 #define DROID_LKM_NS_IPC_SET(_ns)                                              \
-	((struct ctl_table_set *)droid_lkm_layout_ptr((_ns),                   \
-			DROID_LKM_F_IPC_NS_IPC_SET))
+	((struct ctl_table_set *)((char *)(_ns) +                              \
+			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_IPC_SET)))
 #define DROID_LKM_NS_IPC_SYSCTLS(_ns)                                          \
-	((struct ctl_table_header **)droid_lkm_layout_ptr((_ns),               \
-			DROID_LKM_F_IPC_NS_IPC_SYSCTLS))
+	((struct ctl_table_header **)((char *)(_ns) +                          \
+			droid_lkm_ipcns_off(DROID_LKM_F_IPC_NS_IPC_SYSCTLS)))
 static bool droid_lkm_ipc_sysctl_fields_ok(void)
 {
 	if (!droid_lkm_layout_ok(DROID_LKM_F_IPC_NS_IPC_SET) ||
