@@ -1,10 +1,10 @@
 # droid_lkm
 
-Out-of-tree kernel modules that provide missing namespace and IPC features
-(`CONFIG_SYSVIPC`, `CONFIG_POSIX_MQUEUE`, `CONFIG_PID_NS`, `CONFIG_IPC_NS`)
-for stock GKI kernels. It enables container runtimes like Droidspaces without
-kernel recompilation or struct layout modifications, preserving vendor module
-compatibility.
+Out-of-tree kernel modules that provide missing namespace, IPC and container
+features (`CONFIG_SYSVIPC`, `CONFIG_POSIX_MQUEUE`, `CONFIG_PID_NS`, `CONFIG_IPC_NS`,
+`devtmpfs`, `xt_addrtype`, fake userns) for stock GKI kernels. It enables container
+runtimes like Droidspaces without kernel recompilation or struct layout modifications,
+preserving vendor module compatibility.
 
 ## Support Matrix
 
@@ -18,6 +18,16 @@ compatibility.
 | **6.6** | Android 15 | `android15-6.6` |
 | **6.12** | Android 16 | `android16-6.12` |
 | **6.18** | Android 17 | `android17-6.18` |
+
+## Container helpers & fake userns (`droid_lkm_misc`)
+
+On 5.15+, `droid_lkm_misc` provides additional container requirements:
+- **`devtmpfs` & `xt_addrtype`**: required for container `/dev` mounting and iptables routing.
+- **Fake user namespace**: emulates `CLONE_NEWUSER`, `/proc/<pid>/ns/user`, and capability scopes so privileged runtimes (like Droidspaces running as root) can initialize without kernel `CONFIG_USER_NS`.
+
+**Limitations:**
+- **No UID/GID translation**: host UIDs never change inside the namespace (`make_kuid()` remains identity).
+- **No rootless containers**: unprivileged runtimes (e.g. rootless Podman) will not see UID 0 or VFS root authority and are **not supported**.
 
 ## Contributors
 
