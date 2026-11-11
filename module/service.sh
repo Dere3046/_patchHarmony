@@ -25,25 +25,45 @@ conf() {
     sed -n "s/^$1=//p" "$CONF" 2>/dev/null | tail -n 1
 }
 
+get_modules() {
+    local mods=$(conf modules)
+    [ -n "$mods" ] || mods="droid_lkm droid_lkm_vendor"
+    set -- "$MODDIR"/bin/*/droid_lkm_misc.ko
+    if [ -f "$1" ]; then
+        case " $mods " in
+        *" droid_lkm_misc "*) ;;
+        *) mods="$mods droid_lkm_misc" ;;
+        esac
+    fi
+    echo "$mods"
+}
+
 install() {
-    local m ko out rc
-    for m in $(conf modules); do
+    local m ko out rc mods
+    mods=$(get_modules)
+    for m in $mods; do
         set -- "$MODDIR"/bin/*/"$m".ko
         ko=$1
         [ -f "$ko" ] || {
-            log "missing $m.ko"
-            return 1
+            log "missing $m.ko, skipped"
+            continue
         }
         out=$(insmod "$ko" $(conf "$m") 2>&1)
         rc=$?
         [ -n "$out" ] && log "insmod $m: $out"
-        [ "$rc" -eq 0 ] || return "$rc"
+        if [ "$rc" -ne 0 ]; then
+            if [ "$m" = "droid_lkm_misc" ]; then
+                log "droid_lkm_misc failed (rc=$rc), skipped"
+                continue
+            fi
+            return "$rc"
+        fi
     done
     return 0
 }
 
 main() {
-    local rc
+    local rc mods
     mkdir -p "$DATA"
 
     [ -f "$AUTO" ] || return 0
@@ -63,12 +83,14 @@ main() {
         log "no config.conf"
         return 1
     }
-    [ -n "$(conf modules)" ] || {
+
+    mods=$(get_modules)
+    [ -n "$mods" ] || {
         log "no modules declared"
         return 1
     }
 
-    printf '%s\n' "$(conf modules)" > "$MARK"
+    printf '%s\n' "$mods" > "$MARK"
     sync
     install
     rc=$?
@@ -76,7 +98,7 @@ main() {
     sync
 
     if [ "$rc" -eq 0 ]; then
-        log "loaded $(conf modules)"
+        log "loaded $mods"
     else
         log "install failed rc=$rc"
     fi
