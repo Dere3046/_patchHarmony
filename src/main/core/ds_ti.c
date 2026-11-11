@@ -174,18 +174,7 @@ static bool droid_lkm_layout_trusted_flag;
 
 static bool droid_lkm_layout_verified(u8 state)
 {
-	if (state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
-	    state == DS_COMPAT_ANCHORED)
-		return true;
-#ifdef DROID_LKM_LAYOUT_MANUAL
-	if (state == DS_COMPAT_MANUAL)
-		return true;
-#endif
-#if defined(DROID_LKM_LAYOUT_FALLBACK) || defined(DROID_LKM_LAYOUT_FORCE_BUILD)
-	return state == DS_COMPAT_BUILD;
-#else
-	return false;
-#endif
+	return ds_compat_layout_verified(state);
 }
 
 static bool droid_lkm_layout_field_verified(const char *type, const char *member)

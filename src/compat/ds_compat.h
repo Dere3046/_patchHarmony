@@ -68,6 +68,9 @@ void ds_compat_layout_fallback(struct ds_compat_layout *l);
 void ds_compat_layout_force_build(struct ds_compat_layout *l);
 const char *ds_compat_state_name(u8 state);
 
+/* one state, one answer: is the offset this field carries safe to dereference */
+bool ds_compat_layout_verified(u8 state);
+
 /* no BTF: verify the kernel owned structs against symbols, refuse the rest */
 bool ds_compat_layout_anchor(struct ds_compat_layout *l);
 void ds_compat_layout_report(struct ds_compat_layout *l);

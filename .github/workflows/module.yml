@@ -2,6 +2,8 @@ name: Module zip
 on:
   workflow_dispatch:
   push:
+    branches:
+      - feat/gki-6.6-misc
     tags: ['v*']
 
 jobs:
@@ -49,6 +51,7 @@ jobs:
           path: |
             out/${{ matrix.kmi }}/droid_lkm.ko
             out/${{ matrix.kmi }}/droid_lkm_vendor.ko
+            out/${{ matrix.kmi }}/droid_lkm_misc.ko
           if-no-files-found: warn
 
   package:

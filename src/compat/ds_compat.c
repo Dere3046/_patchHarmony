@@ -138,6 +138,27 @@ const char *ds_compat_state_name(u8 state)
 	}
 }
 
+/*
+ * one place answers whether an offset may be dereferenced. DS_COMPAT_BUILD counts
+ * only when the build was asked to fall back: an offset never checked against the
+ * running kernel is a guess
+ */
+bool ds_compat_layout_verified(u8 state)
+{
+	if (state == DS_COMPAT_OK || state == DS_COMPAT_VERIFIED ||
+	    state == DS_COMPAT_ANCHORED)
+		return true;
+#ifdef DROID_LKM_LAYOUT_MANUAL
+	if (state == DS_COMPAT_MANUAL)
+		return true;
+#endif
+#if defined(DROID_LKM_LAYOUT_FALLBACK) || defined(DROID_LKM_LAYOUT_FORCE_BUILD)
+	return state == DS_COMPAT_BUILD;
+#else
+	return false;
+#endif
+}
+
 /* the layout engine reads BTF through the type info reader */
 static void ds_compat_layout_unverified(struct ds_compat_layout *l)
 {
