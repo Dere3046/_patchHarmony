@@ -2,7 +2,9 @@ name: Module zip
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*'
+      - '[0-9]*'
 
 jobs:
   build:
@@ -63,8 +65,6 @@ jobs:
     needs: build
     if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -122,7 +122,8 @@ jobs:
         run: |
           args=""
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            args="-Pversion=$GITHUB_REF_NAME"
+            ver=${GITHUB_REF_NAME#v}
+            args="-Pversion=$ver"
           fi
           gradle --no-daemon packageAllFlavors $args
           ls -lh build/dist
@@ -132,9 +133,3 @@ jobs:
           name: phDroid-modules
           path: build/dist/*.zip
           if-no-files-found: error
-
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: build/dist/*.zip
-          generate_release_notes: true
