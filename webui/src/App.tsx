@@ -94,7 +94,7 @@ function showToast(message: string) {
 
 export function App() {
   const native = isNativeHost();
-  const [lang, setLang] = useState<Lang>(() => (readStored('phdroid_lang') === 'en' ? 'en' : 'zh'));
+  const [lang, setLang] = useState<Lang>(() => (readStored('phdroid_lang') === 'zh' ? 'zh' : 'en'));
   const [theme, setThemeState] = useState<ThemeMode>(() => {
     const stored = readStored('phdroid_theme');
     return stored === 'dark' || stored === 'light' ? stored : 'auto';
