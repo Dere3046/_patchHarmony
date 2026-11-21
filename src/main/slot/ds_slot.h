@@ -12,5 +12,11 @@ void droid_lkm_slot_exit(void);
 
 bool droid_lkm_slot_skip_sysvipc(void);
 bool droid_lkm_slot_no_fake_ns(void);
+bool droid_lkm_slot_ready(void);
+bool droid_lkm_slot_clone_ready(void);
+bool droid_lkm_slot_gate_enabled(void);
+int droid_lkm_slot_ipc_count(void);
+int droid_lkm_slot_ipc32_count(void);
+int droid_lkm_slot_ipc_total(void);
 
 #endif

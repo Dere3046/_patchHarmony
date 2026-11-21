@@ -35,7 +35,7 @@ static int __init droid_lkm_vendor_init(void)
 
 	ret = hk_init(&dlc_hk_cfg);
 	if (ret) {
-		pr_err("[droid_lkm_vendor] hk_init failed: %d\n", ret);
+		pr_err("[E] [droid_lkm_vendor] hk_init failed: %d\n", ret);
 		return ret;
 	}
 
@@ -48,12 +48,12 @@ static int __init droid_lkm_vendor_init(void)
 	/* vendor ddl history bounds */
 	(void)dlc_ddl_hit_init();
 	if (ret) {
-		pr_err("[droid_lkm_vendor] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
+		pr_err("[E] [droid_lkm_vendor] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
 		       ret);
 		hk_exit();
 		return ret;
 	}
-	pr_info("[droid_lkm_vendor] ready\n");
+	pr_info("[I] [droid_lkm_vendor] ready\n");
 	return 0;
 }
 

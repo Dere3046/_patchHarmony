@@ -308,6 +308,16 @@ int droid_lkm_status_init(void)
 	return 0;
 }
 
+bool droid_lkm_status_ready(void)
+{
+	return droid_lkm_status_hooked;
+}
+
+bool droid_lkm_status_can_insert_pos(void)
+{
+	return droid_lkm_status_can_insert;
+}
+
 void droid_lkm_status_exit(void)
 {
 	if (droid_lkm_status_hooked) {

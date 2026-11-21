@@ -38,6 +38,7 @@ struct ds_hook {
 void ds_hook_policy_apply(void);
 
 const char *ds_hook_route_name(enum ds_hook_route route);
+const char *ds_hook_mode_name(void);
 
 /* a slot that refuses the write falls through to the function routes */
 int ds_hook_install(struct ds_hook *h, const char *sym, const char *wrap);

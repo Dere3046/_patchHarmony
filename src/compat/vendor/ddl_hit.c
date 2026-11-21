@@ -52,16 +52,16 @@ int dlc_ddl_hit_init(void)
 
 	if (!hk_inline_probe("update_ddl_hit_history", &probe) &&
 	    probe.state != HK_INLINE_PLAIN)
-		pr_warn("[droid_lkm_vendor] ddl: entry state %d (%s), text route skipped\n",
+		pr_warn("[W] [droid_lkm_vendor] ddl: entry state %d (%s), text route skipped\n",
 			probe.state, probe.reason ? probe.reason : "?");
 	else {
 		ret = hk_redir_install(&dlc_ddl_hook, "update_ddl_hit_history",
 				       "dlc_ddl_update_wrap", HK_REDIR_TEXT);
 		if (!ret) {
-			pr_info("[droid_lkm_vendor] ddl: update_ddl_hit_history on the text route\n");
+			pr_info("[I] [droid_lkm_vendor] ddl: update_ddl_hit_history on the text route\n");
 			return 0;
 		}
-		pr_warn("[droid_lkm_vendor] ddl: text route refused %d, trying kprobe\n",
+		pr_warn("[W] [droid_lkm_vendor] ddl: text route refused %d, trying kprobe\n",
 			ret);
 	}
 
@@ -70,11 +70,11 @@ int dlc_ddl_hit_init(void)
 				  (unsigned long)dlc_ddl_update_wrap,
 				  HK_REDIR_KPROBE);
 	if (ret) {
-		pr_warn("[droid_lkm_vendor] ddl: no route took update_ddl_hit_history (%d)\n",
+		pr_warn("[W] [droid_lkm_vendor] ddl: no route took update_ddl_hit_history (%d)\n",
 			ret);
 		return 0;
 	}
-	pr_info("[droid_lkm_vendor] ddl: update_ddl_hit_history on the kprobe route\n");
+	pr_info("[I] [droid_lkm_vendor] ddl: update_ddl_hit_history on the kprobe route\n");
 	return 0;
 }
 

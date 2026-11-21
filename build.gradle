@@ -8,7 +8,10 @@ plugins {
 }
 
 def moduleDir = layout.projectDirectory.dir('module')
+def variantsDir = file('module/variants')
 def outDir = layout.projectDirectory.dir('out')
+def outNativeDir = layout.projectDirectory.dir((project.findProperty('outNativeDir') ?: 'out-native').toString())
+def outBothDir = layout.projectDirectory.dir((project.findProperty('outBothDir') ?: 'out-both').toString())
 
 def prop = new Properties()
 file('module/module.prop').withInputStream { prop.load(it) }
@@ -16,59 +19,200 @@ file('module/module.prop').withInputStream { prop.load(it) }
 if (project.version == Project.DEFAULT_VERSION) {
     project.version = prop.getProperty('version')
 }
-def modVersion = project.version
-def modCode = project.findProperty('code') ?: prop.getProperty('versionCode')
+def modVersion = project.version.toString()
+def modCode = (project.findProperty('code') ?: prop.getProperty('versionCode')).toString()
 
-def kmis = (project.findProperty('kmis') ?: '').trim().split(/[\s,]+/).findAll { it }
-if (!kmis) {
-    kmis = (outDir.asFile.listFiles() ?: [])
-        .findAll { new File(it, 'droid_lkm.ko').isFile() }
-        .collect { it.name }
-        .sort()
+def explicitKmis = (project.findProperty('kmis') ?: '').toString().trim().split(/[\s,]+/).findAll { it }
+
+def flavorSpecs = [
+    'standard': [
+        taskSuffix: 'Standard',
+        propSuffix: '',
+        zipSuffix: '',
+        customizeSnippet: 'customize_standard.sh',
+        serviceSnippet: 'service_standard.sh',
+        webuiDirName: 'dist-standard'
+    ],
+    'native': [
+        taskSuffix: 'Native',
+        propSuffix: '-native',
+        zipSuffix: '-native',
+        customizeSnippet: 'customize_native.sh',
+        serviceSnippet: 'service_native.sh',
+        webuiDirName: 'dist-native'
+    ],
+    'main-native': [
+        taskSuffix: 'MainNative',
+        propSuffix: '-main&native',
+        zipSuffix: '-main-native',
+        customizeSnippet: 'customize_both.sh',
+        serviceSnippet: 'service_both.sh',
+        webuiDirName: 'dist-main-native'
+    ]
+]
+
+def normalizeFlavor = { Object raw ->
+    def f = (raw ?: 'standard').toString().trim()
+    if (f == 'main&native' || f == 'both') return 'main-native'
+    if (!flavorSpecs.containsKey(f)) {
+        throw new GradleException("unknown flavor '${f}', expected one of ${flavorSpecs.keySet()}")
+    }
+    return f
 }
 
-tasks.register('stageModule', Sync) {
-    into layout.buildDirectory.dir('module')
-    from('LICENSE')
-    from(moduleDir) {
-        filesMatching('module.prop') {
-            filter { line ->
-                line.replaceAll(/^version=.*/, "version=${modVersion}")
-                    .replaceAll(/^versionCode=.*/, "versionCode=${modCode}")
+def resolveCoreKo = { String fl, String k ->
+    if (fl == 'standard') {
+        def p = new File(outDir.asFile, "${k}/droid_lkm.ko")
+        return p.isFile() ? p : null
+    }
+    if (fl == 'native') {
+        def p1 = new File(outNativeDir.asFile, "${k}/droid_lkm.ko")
+        def p2 = new File(outDir.asFile, "${k}/droid_lkm_native.ko")
+        return p1.isFile() ? p1 : (p2.isFile() ? p2 : null)
+    }
+    def b1 = new File(outBothDir.asFile, "${k}/droid_lkm.ko")
+    def b2 = new File(outDir.asFile, "${k}/droid_lkm_both.ko")
+    return b1.isFile() ? b1 : (b2.isFile() ? b2 : null)
+}
+
+def collectKmisForFlavor = { String fl ->
+    if (explicitKmis) return explicitKmis
+    def dirs = [] as Set<String>
+    def scanBase = { File base, String filename ->
+        (base.listFiles() ?: []).each { File sub ->
+            if (sub.isDirectory() && new File(sub, filename).isFile()) {
+                dirs.add(sub.name)
             }
         }
     }
-    kmis.each { k ->
-        from(outDir.dir(k)) {
-            include '*.ko'
-            into "bin/${k}"
+    if (fl == 'standard') {
+        scanBase(outDir.asFile, 'droid_lkm.ko')
+    } else if (fl == 'native') {
+        scanBase(outNativeDir.asFile, 'droid_lkm.ko')
+        scanBase(outDir.asFile, 'droid_lkm_native.ko')
+    } else {
+        scanBase(outBothDir.asFile, 'droid_lkm.ko')
+        scanBase(outDir.asFile, 'droid_lkm_both.ko')
+    }
+    return dirs.sort()
+}
+
+def resolveWebuiDir = { String fl ->
+    def propWebui = project.findProperty('webuiDist')?.toString()?.trim()
+    if (propWebui) {
+        def custom = file(propWebui)
+        if (custom.isDirectory()) return custom
+    }
+    def specDir = file("webui/${flavorSpecs[fl].webuiDirName}")
+    if (specDir.isDirectory()) return specDir
+    def fallback = file('webui/dist')
+    return fallback.isDirectory() ? fallback : null
+}
+
+def registerFlavorTasks = { String fl, boolean primary ->
+    def spec = flavorSpecs[fl]
+    def fullPropVer = "${modVersion}${spec.propSuffix}"
+    def zipName = "phDroid-${modVersion}${spec.zipSuffix}.zip"
+    def stageDir = primary ? layout.buildDirectory.dir('module') : layout.buildDirectory.dir("module-${fl}")
+    def stageTaskName = primary ? 'stageModule' : "stage${spec.taskSuffix}"
+    def pkgTaskName = primary ? 'packageModule' : "package${spec.taskSuffix}"
+
+    def stageTask = tasks.register(stageTaskName, Sync) {
+        into stageDir
+        from('LICENSE')
+        def custSnippet = new File(variantsDir, spec.customizeSnippet).getText('UTF-8').trim()
+        def svcSnippet = new File(variantsDir, spec.serviceSnippet).getText('UTF-8').trim()
+
+        from(moduleDir) {
+            exclude 'variants/**'
+            filesMatching('module.prop') {
+                filter { line ->
+                    line.replaceAll(/^version=.*/, "version=${fullPropVer}")
+                        .replaceAll(/^versionCode=.*/, "versionCode=${modCode}")
+                }
+            }
+            filesMatching('customize.sh') {
+                filter { line ->
+                    line.trim() == '# @@PHDROID_CUSTOMIZE_VARIANTS@@' ? custSnippet : line
+                }
+            }
+            filesMatching('service.sh') {
+                filter { line ->
+                    line.trim() == '# @@PHDROID_SERVICE_VARIANTS@@' ? svcSnippet : line
+                }
+            }
+        }
+
+        def webDir = resolveWebuiDir(fl)
+        if (webDir != null) {
+            from(webDir) {
+                into 'webroot'
+            }
+        }
+
+        collectKmisForFlavor(fl).each { String k ->
+            def coreKo = resolveCoreKo(fl, k)
+            if (coreKo != null) {
+                from(coreKo) {
+                    into "bin/${k}"
+                    rename { 'droid_lkm.ko' }
+                }
+            }
+            def kVendor = [
+                new File(outDir.asFile, "${k}/droid_lkm_vendor.ko"),
+                new File(outNativeDir.asFile, "${k}/droid_lkm_vendor.ko"),
+                new File(outBothDir.asFile, "${k}/droid_lkm_vendor.ko")
+            ].find { it.isFile() }
+            if (kVendor != null) {
+                from(kVendor) { into "bin/${k}" }
+            }
+        }
+
+        dirPermissions { unix('0755') }
+        filePermissions { unix('0644') }
+        eachFile { d ->
+            if (d.name.endsWith('.sh') || d.name == 'update-binary') {
+                d.permissions { unix('0755') }
+            }
+        }
+
+        doLast {
+            ['customize.sh', 'service.sh'].each { scriptName ->
+                def staged = new File(stageDir.get().asFile, scriptName)
+                if (!staged.isFile() || staged.getText('UTF-8').contains('@@PHDROID_')) {
+                    throw new GradleException("${scriptName} placeholder substitution failed for flavor ${fl}")
+                }
+            }
         }
     }
-    dirPermissions { unix('0755') }
-    filePermissions { unix('0644') }
-    eachFile { d ->
-        if (d.name.endsWith('.sh') || d.name == 'update-binary') {
-            d.permissions { unix('0755') }
+
+    tasks.register(pkgTaskName, Zip) {
+        dependsOn stageTask
+        from stageDir
+        archiveFileName = zipName
+        destinationDirectory = layout.buildDirectory.dir('dist')
+        preserveFileTimestamps = false
+        dirPermissions { unix('0755') }
+        filePermissions { unix('0644') }
+        eachFile { d ->
+            if (d.name.endsWith('.sh') || d.name == 'update-binary') {
+                d.permissions { unix('0755') }
+            }
+        }
+        doFirst {
+            if (!collectKmisForFlavor(fl)) {
+                throw new GradleException("no .ko artifacts found for flavor '${fl}'")
+            }
         }
     }
 }
 
-tasks.register('packageModule', Zip) {
-    dependsOn 'stageModule'
-    from layout.buildDirectory.dir('module')
-    archiveFileName = "phDroid-${modVersion}.zip"
-    destinationDirectory = layout.buildDirectory.dir('dist')
-    preserveFileTimestamps = false
-    dirPermissions { unix('0755') }
-    filePermissions { unix('0644') }
-    eachFile { d ->
-        if (d.name.endsWith('.sh') || d.name == 'update-binary') {
-            d.permissions { unix('0755') }
-        }
-    }
-    doFirst {
-        if (!kmis) {
-            throw new GradleException('no droid_lkm.ko under out/')
-        }
-    }
+def activeFlavor = normalizeFlavor(project.findProperty('flavor'))
+registerFlavorTasks(activeFlavor, true)
+flavorSpecs.keySet().each { fl ->
+    registerFlavorTasks(fl, false)
+}
+
+tasks.register('packageAllFlavors') {
+    dependsOn flavorSpecs.values().collect { "package${it.taskSuffix}" }
 }

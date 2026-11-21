@@ -1414,13 +1414,65 @@ void droid_lkm_slot_exit(void)
 		}
 	}
 
-	if (droid_lkm_orig_clone3)
+	if (droid_lkm_orig_clone3) {
 		droid_lkm_slot_unpatch(droid_lkm_sys_call_table, __NR_clone3);
-	if (droid_lkm_orig_clone)
+		droid_lkm_orig_clone3 = NULL;
+	}
+	if (droid_lkm_orig_clone) {
 		droid_lkm_slot_unpatch(droid_lkm_sys_call_table, __NR_clone);
-	if (droid_lkm_orig_reboot)
+		droid_lkm_orig_clone = NULL;
+	}
+	if (droid_lkm_orig_reboot) {
 		droid_lkm_slot_unpatch(droid_lkm_sys_call_table, __NR_reboot);
-	if (droid_lkm_orig_unshare)
+		droid_lkm_orig_reboot = NULL;
+	}
+	if (droid_lkm_orig_unshare) {
 		droid_lkm_slot_unpatch(droid_lkm_sys_call_table, __NR_unshare);
+		droid_lkm_orig_unshare = NULL;
+	}
 	sc_exit();
+}
+
+bool droid_lkm_slot_ready(void)
+{
+	return droid_lkm_orig_unshare != NULL && droid_lkm_orig_reboot != NULL;
+}
+
+bool droid_lkm_slot_clone_ready(void)
+{
+	return droid_lkm_orig_clone != NULL && droid_lkm_orig_clone3 != NULL;
+}
+
+bool droid_lkm_slot_gate_enabled(void)
+{
+	return droid_lkm_gate_enabled;
+}
+
+static int droid_lkm_slot_count_patched(const bool *arr, size_t n)
+{
+	size_t i;
+	int count = 0;
+
+	for (i = 0; i < n; i++) {
+		if (arr[i])
+			count++;
+	}
+	return count;
+}
+
+int droid_lkm_slot_ipc_count(void)
+{
+	return droid_lkm_slot_count_patched(droid_lkm_ipc_patched,
+					    ARRAY_SIZE(droid_lkm_ipc_slots));
+}
+
+int droid_lkm_slot_ipc32_count(void)
+{
+	return droid_lkm_slot_count_patched(droid_lkm_ipc32_patched,
+					    ARRAY_SIZE(droid_lkm_ipc_slots));
+}
+
+int droid_lkm_slot_ipc_total(void)
+{
+	return (int)ARRAY_SIZE(droid_lkm_ipc_slots);
 }

@@ -17,8 +17,8 @@
 
 #define DS_HOOK_TAG "droid_lkm/hook"
 
-#define ds_hook_info(fmt, ...) pr_info("[" DS_HOOK_TAG "] " fmt, ##__VA_ARGS__)
-#define ds_hook_warn(fmt, ...) pr_warn("[" DS_HOOK_TAG "] " fmt, ##__VA_ARGS__)
+#define ds_hook_info(fmt, ...) pr_info("[I] [" DS_HOOK_TAG "] " fmt, ##__VA_ARGS__)
+#define ds_hook_warn(fmt, ...) pr_warn("[W] [" DS_HOOK_TAG "] " fmt, ##__VA_ARGS__)
 
 /*
  * 0 asks the kernel on every install, 1 takes only the entry write, 2 takes only
@@ -56,6 +56,15 @@ const char *ds_hook_route_name(enum ds_hook_route route)
 	if (route > DS_HOOK_KPROBE)
 		return "?";
 	return names[route];
+}
+
+const char *ds_hook_mode_name(void)
+{
+	if (ds_hook_mode == DS_HOOK_TEXT_ONLY)
+		return "text";
+	if (ds_hook_mode == DS_HOOK_KPROBE_ONLY)
+		return "kprobe";
+	return "auto";
 }
 
 // every install lands here so the load report can name the ones that failed

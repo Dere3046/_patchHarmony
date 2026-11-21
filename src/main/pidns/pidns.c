@@ -71,7 +71,27 @@ static bool droid_lkm_pid_use_native;
 static bool droid_lkm_nsproxy_enable;
 module_param_named(nsproxy, droid_lkm_nsproxy_enable, bool, 0444);
 MODULE_PARM_DESC(nsproxy, "take over nsproxy lifecycle, default 0");
+#ifdef DROID_LKM_PID_BOTH
+#define DROID_LKM_PID_BACKENDS "both"
+#else
+#ifdef DROID_LKM_NATIVE_PID
+#define DROID_LKM_PID_BACKENDS "native"
+#else
+#define DROID_LKM_PID_BACKENDS "main"
+#endif
+#endif
+
+MODULE_INFO(pid_backends, DROID_LKM_PID_BACKENDS);
+
 bool droid_lkm_pidns_nsproxy_enabled(void) { return droid_lkm_nsproxy_enable; }
+const char *droid_lkm_pidns_impl_name(void)
+{
+	return droid_lkm_pid_use_native ? "native" : "main";
+}
+const char *droid_lkm_pidns_backends(void)
+{
+	return DROID_LKM_PID_BACKENDS;
+}
 static struct kmem_cache *droid_lkm_pid_cache[MAX_PID_NS_LEVEL];
 static DEFINE_MUTEX(droid_lkm_pid_caches_mutex);
 
@@ -308,6 +328,11 @@ struct pid_namespace *droid_lkm_pidns_task_for_children(struct task_struct *task
 	task_unlock(task);
 
 	return ns;
+}
+
+bool droid_lkm_pidns_ready(void)
+{
+	return droid_lkm_reaper_task != NULL;
 }
 
 bool droid_lkm_pidns_busy(void)

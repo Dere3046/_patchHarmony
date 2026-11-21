@@ -1,0 +1,191 @@
+.hero-interactive {
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: pan-y;
+  will-change: transform;
+  transform-origin: center center;
+}
+
+.hero-interactive:active {
+  cursor: grabbing;
+}
+
+.hero-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--hero-glow-o, 0);
+  background: radial-gradient(
+    240px circle at var(--hero-gx, 50%) var(--hero-gy, 50%),
+    color-mix(in srgb, currentColor 20%, transparent),
+    transparent 70%
+  );
+}
+
+.hero-inner {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--ph-shape-full);
+  font-size: 12px;
+  font-weight: 600;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.hero-check path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 0;
+}
+
+.hero-check.animate path {
+  stroke-dashoffset: 24;
+  animation: hero-check-draw 380ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.hero-sweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 20%,
+    color-mix(in srgb, currentColor 22%, transparent) 50%,
+    transparent 80%
+  );
+  transform: translateX(-110%);
+  animation: hero-success-sweep 700ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.hero-title {
+  margin: 12px 0 2px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.hero-meta {
+  font-size: 12px;
+  opacity: 0.85;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.banner-blocked {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.hold-btn {
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: var(--ph-shape-full);
+  height: 40px;
+  min-width: 112px;
+  padding: 0 20px;
+  background: rgb(var(--mdui-color-primary));
+  color: rgb(var(--mdui-color-on-primary));
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: pan-y;
+  transition: transform 120ms cubic-bezier(0.22, 1, 0.36, 1), background-color 200ms ease, color 200ms ease;
+}
+
+.hold-btn.holding {
+  transform: scale(0.955);
+}
+
+.hold-btn.done {
+  background: rgb(var(--mdui-color-primary-container));
+  color: rgb(var(--mdui-color-on-primary-container));
+  cursor: default;
+}
+
+.hold-btn.just-done {
+  animation: hold-done-pop 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.hold-btn:disabled:not(.done) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hold-fill {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, rgb(var(--mdui-color-on-primary)) 26%, transparent);
+  transform-origin: left center;
+  transform: scaleX(var(--hold-p, 0));
+  pointer-events: none;
+}
+
+.hold-content {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hold-check path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 0;
+}
+
+.hold-btn.just-done .hold-check path {
+  stroke-dashoffset: 24;
+  animation: hero-check-draw 340ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes hero-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes hero-success-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes hold-done-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  55% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-check.animate path,
+  .hold-btn.just-done .hold-check path {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .hero-sweep {
+    display: none;
+  }
+}

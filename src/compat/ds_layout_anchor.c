@@ -516,7 +516,7 @@ bool ds_compat_layout_anchor(struct ds_compat_layout *l)
 		l->fields[i].state = DS_COMPAT_UNVERIFIED;
 	}
 
-	pr_info("[%s] layout: no BTF, anchors task=%d nsproxy=%d pid=%d pidns=%d, module owned structs keep the build layout\n",
+	pr_info("[I] [%s] layout: no BTF, anchors task=%d nsproxy=%d pid=%d pidns=%d, module owned structs keep the build layout\n",
 		l->module, task, nsproxy, pid, pidns);
 	return task || nsproxy || pid || pidns;
 }

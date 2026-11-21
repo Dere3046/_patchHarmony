@@ -1,6 +1,8 @@
 .sdk/
 deps/
 out/
+out-native/
+out-both/
 *.ko
 *.o
 *.mod
@@ -15,3 +17,6 @@ build/
 .gradle/
 local.properties
 *.hprof
+webui/node_modules/
+webui/dist*/
+webui/tsconfig.tsbuildinfo

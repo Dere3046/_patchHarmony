@@ -321,6 +321,11 @@ int droid_lkm_proc_init(void)
 	return 0;
 }
 
+bool droid_lkm_proc_ready(void)
+{
+	return droid_lkm_nsdir_hook.live;
+}
+
 void droid_lkm_proc_exit(void)
 {
 	droid_lkm_pidns_sysctl_exit();

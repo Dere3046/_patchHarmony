@@ -32,6 +32,7 @@ struct ipc_namespace *droid_lkm_ipcns_host_ns(void);
 
 
 bool droid_lkm_ipcns_busy(void);
+bool droid_lkm_ipcns_ready(void);
 
 
 bool droid_lkm_ipcns_task_is_host(struct task_struct *task);

@@ -1,0 +1,24 @@
+{
+  "name": "phdroid-webui",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:flavors": "tsc -b && VITE_PHDROID_FLAVOR=standard VITE_OUT_DIR=dist-standard vite build && VITE_PHDROID_FLAVOR=native VITE_OUT_DIR=dist-native vite build && VITE_PHDROID_FLAVOR=main-native VITE_OUT_DIR=dist-main-native vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "mdui": "^2.1.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0"
+  }
+}

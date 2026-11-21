@@ -18,9 +18,9 @@ static const char *ds_compat_module = "droid_lkm";
 static const char *ds_compat_own_prefix = "";
 
 #define ds_compat_info(fmt, ...)                                               \
-	pr_info("[%s] " fmt, ds_compat_module, ##__VA_ARGS__)
+	pr_info("[I] [%s] " fmt, ds_compat_module, ##__VA_ARGS__)
 #define ds_compat_warn(fmt, ...)                                               \
-	pr_warn("[%s] " fmt, ds_compat_module, ##__VA_ARGS__)
+	pr_warn("[W] [%s] " fmt, ds_compat_module, ##__VA_ARGS__)
 
 int ds_compat_init(const char *module, const char *own_prefix)
 {

@@ -28,5 +28,6 @@ void droid_lkm_ns_kind_unregister(const struct droid_lkm_ns_kind_reg *kind);
 
 int droid_lkm_proc_init(void);
 void droid_lkm_proc_exit(void);
+bool droid_lkm_proc_ready(void);
 
 #endif

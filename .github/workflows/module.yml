@@ -9,17 +9,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kmi:
-          - android12-5.10
-          - android13-5.10
-          - android13-5.15
-          - android14-5.15
-          - android14-6.1
-          - android15-6.6
-          - android16-6.12
+        variant: [standard, native, both]
+        target:
+          - { kmi: android12-5.10, image: android12-5.10-20260313 }
+          - { kmi: android13-5.10, image: android13-5.10-20260313 }
+          - { kmi: android13-5.15, image: android13-5.15-20260313 }
+          - { kmi: android14-5.15, image: android14-5.15-20260313 }
+          - { kmi: android14-6.1, image: android14-6.1-20260313 }
+          - { kmi: android15-6.6, image: android15-6.6-20260313 }
+          - { kmi: android16-6.12, image: android16-6.12-20260313 }
+          - { kmi: android17-6.18, image: android17-6.18-20260828 }
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260313
+      image: ghcr.io/ylarod/ddk-min:${{ matrix.target.image }}
       options: --privileged
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +33,15 @@ jobs:
           git config --global url."https://x-access-token:${KMSDK_TOKEN}@github.com/".insteadOf "git@github.com:"
           scripts/fetch-deps.sh
 
-      - name: Build ${{ matrix.kmi }}
+      - name: Build ${{ matrix.variant }} ${{ matrix.target.kmi }}
         run: |
-          make VER=${{ matrix.kmi }} > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          extra=""
+          if [ "${{ matrix.variant }}" = "native" ]; then
+            extra="DROID_LKM_NATIVE_PID=1"
+          elif [ "${{ matrix.variant }}" = "both" ]; then
+            extra="DROID_LKM_PID_BOTH=1"
+          fi
+          make VER=${{ matrix.target.kmi }} $extra > build.log 2>&1 || { tail -50 build.log; exit 1; }
           tail -5 build.log
 
       - name: Zero warning gate
@@ -45,15 +53,14 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: droid_lkm-${{ matrix.kmi }}
+          name: droid_lkm-${{ matrix.variant }}-${{ matrix.target.kmi }}
           path: |
-            out/${{ matrix.kmi }}/droid_lkm.ko
-            out/${{ matrix.kmi }}/droid_lkm_vendor.ko
+            out/${{ matrix.target.kmi }}/droid_lkm.ko
+            out/${{ matrix.target.kmi }}/droid_lkm_vendor.ko
           if-no-files-found: warn
 
   package:
     needs: build
-    
     if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
     permissions:
@@ -66,6 +73,19 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build webui flavors
+        run: |
+          if [ -f webui/package.json ]; then
+            npm --prefix webui ci
+            for fl in standard native main-native; do
+              VITE_PHDROID_FLAVOR="$fl" VITE_OUT_DIR="dist-$fl" npm --prefix webui run build
+            done
+          fi
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.1'
@@ -76,31 +96,40 @@ jobs:
 
       - name: Collect ko
         run: |
-          mkdir -p out
-          for d in art/*/; do
-            k=${d%/}; k=${k##*/droid_lkm-}
-            [ -f "$d/droid_lkm.ko" ] || { echo "skip $k: no droid_lkm.ko"; continue; }
-            mkdir -p "out/$k"
-            cp "$d"/*.ko "out/$k/"
-            echo "$k: $(ls "out/$k" | tr '\n' ' ')"
-          done
-          if [ -z "$(ls -A out)" ]; then
+          collect_variant() {
+            local var=$1
+            local dst=$2
+            local d k
+            mkdir -p "$dst"
+            for d in art/droid_lkm-"$var"-*/; do
+              [ -d "$d" ] || continue
+              k=${d%/}; k=${k##*/droid_lkm-"$var"-}
+              [ -f "$d/droid_lkm.ko" ] || { echo "skip $var/$k: no droid_lkm.ko"; continue; }
+              mkdir -p "$dst/$k"
+              cp "$d"/*.ko "$dst/$k/"
+              echo "$var/$k: $(ls "$dst/$k" | tr '\n' ' ')"
+            done
+          }
+          collect_variant standard out
+          collect_variant native out-native
+          collect_variant both out-both
+          if [ -z "$(ls -A out)" ] && [ -z "$(ls -A out-native)" ] && [ -z "$(ls -A out-both)" ]; then
             echo "no ko collected, nothing to package"
             exit 1
           fi
 
-      - name: Package
+      - name: Package all flavors
         run: |
           args=""
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             args="-Pversion=$GITHUB_REF_NAME"
           fi
-          gradle --no-daemon packageModule $args
+          gradle --no-daemon packageAllFlavors $args
           ls -lh build/dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: phDroid-module
+          name: phDroid-modules
           path: build/dist/*.zip
           if-no-files-found: error
 

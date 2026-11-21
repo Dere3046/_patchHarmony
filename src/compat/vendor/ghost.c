@@ -161,7 +161,7 @@ __nocfi noinline struct task_struct *dlc_ftbv_wrap(pid_t vnr)
 	 */
 	dlc_ghost_hits++;
 	if (dlc_ghost_hits <= DLC_GHOST_LOG_MAX)
-		pr_info("[droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s (orig=%s)\n",
+		pr_info("[I] [droid_lkm_vendor] ghost: pid=%d caller=%pS -> %s (orig=%s)\n",
 			(int)vnr, (void *)ret_ip, DLC_GHOST_TASK_COMM,
 			orig ? "miss" : "race-guard");
 	return &dlc_ghost_task;
@@ -178,6 +178,17 @@ enum {
 	DLC_GHOST_F_THREAD_NODE,
 	DLC_GHOST_F_PTRACED,
 	DLC_GHOST_F_PTRACE_ENTRY,
+	/* the anchor writes these and counts a missing one as a failed scan,
+	 * ghost itself only reads the fields above */
+	DLC_GHOST_F_REAL_CRED,
+	DLC_GHOST_F_CRED,
+	DLC_GHOST_F_NSPROXY,
+	DLC_GHOST_F_THREAD_PID,
+	DLC_GHOST_F_MM,
+	DLC_GHOST_F_FS,
+	DLC_GHOST_F_SIGNAL,
+	DLC_GHOST_F_SIGHAND,
+	DLC_GHOST_F_FLAGS,
 	DLC_GHOST_F_COUNT
 };
 
@@ -192,6 +203,15 @@ static struct ds_compat_field dlc_ghost_fields[DLC_GHOST_F_COUNT] = {
 	[DLC_GHOST_F_THREAD_NODE] = { .type = "task_struct", .member = "thread_node" },
 	[DLC_GHOST_F_PTRACED] = { .type = "task_struct", .member = "ptraced" },
 	[DLC_GHOST_F_PTRACE_ENTRY] = { .type = "task_struct", .member = "ptrace_entry" },
+	[DLC_GHOST_F_REAL_CRED] = { .type = "task_struct", .member = "real_cred" },
+	[DLC_GHOST_F_CRED] = { .type = "task_struct", .member = "cred" },
+	[DLC_GHOST_F_NSPROXY] = { .type = "task_struct", .member = "nsproxy" },
+	[DLC_GHOST_F_THREAD_PID] = { .type = "task_struct", .member = "thread_pid" },
+	[DLC_GHOST_F_MM] = { .type = "task_struct", .member = "mm" },
+	[DLC_GHOST_F_FS] = { .type = "task_struct", .member = "fs" },
+	[DLC_GHOST_F_SIGNAL] = { .type = "task_struct", .member = "signal" },
+	[DLC_GHOST_F_SIGHAND] = { .type = "task_struct", .member = "sighand" },
+	[DLC_GHOST_F_FLAGS] = { .type = "task_struct", .member = "flags" },
 };
 
 static struct ds_compat_type dlc_ghost_types[] = {
@@ -216,6 +236,10 @@ static int dlc_ghost_layout(void)
 		return -ENODATA;
 
 	dlc_ghost_size = dlc_ghost_types[0].live;
+	/* the anchor backend does not size structs, the build size keeps every
+	 * offset it located inside the copy */
+	if (!dlc_ghost_size)
+		dlc_ghost_size = sizeof(struct task_struct);
 	return 0;
 }
 
@@ -236,7 +260,7 @@ static int dlc_ghost_build(void)
 
 	ret = dlc_ghost_layout();
 	if (ret) {
-		pr_err("[droid_lkm_vendor] ghost: no task_struct offsets for the running kernel (%d)\n",
+		pr_err("[E] [droid_lkm_vendor] ghost: no task_struct offsets for the running kernel (%d)\n",
 		       ret);
 		return ret;
 	}
@@ -247,8 +271,21 @@ static int dlc_ghost_build(void)
 		copy = dlc_ghost_size;
 	memcpy(&dlc_ghost_task, (void *)init_task_addr, copy);
 
-	for (i = DLC_GHOST_F_TASKS; i <= DLC_GHOST_F_PTRACE_ENTRY; i++)
-		INIT_LIST_HEAD(dlc_ghost_at(i));
+	/*
+	 * an empty list head in init_task points at itself, so every one of them
+	 * can be repointed at this copy without knowing the member names; tasks
+	 * is linked into the live task list, not self linked, and is reset below
+	 */
+	for (i = 0; i + 16 <= copy; i += 8) {
+		unsigned long *p = (unsigned long *)((char *)&dlc_ghost_task + i);
+
+		if (p[0] != init_task_addr + i || p[1] != init_task_addr + i)
+			continue;
+		p[0] = (unsigned long)&dlc_ghost_task + i;
+		p[1] = p[0];
+	}
+	if (dlc_ghost_fields[DLC_GHOST_F_TASKS].live)
+		INIT_LIST_HEAD(dlc_ghost_at(DLC_GHOST_F_TASKS));
 
 	strscpy(dlc_ghost_at(DLC_GHOST_F_COMM), DLC_GHOST_TASK_COMM, TASK_COMM_LEN);
 	// vendors index PID_MAX_DEFAULT sized arrays by p->pid
@@ -277,7 +314,7 @@ static void dlc_ghost_prewarm(void)
 
 	if (sym_addr) {
 		WRITE_ONCE(dlc_midas_page, sym_addr & PAGE_MASK);
-		pr_info("[droid_lkm_vendor] ghost: pre-warmed midas page (0x%lx)\n",
+		pr_info("[I] [droid_lkm_vendor] ghost: pre-warmed midas page (0x%lx)\n",
 			sym_addr & PAGE_MASK);
 	}
 }
@@ -297,7 +334,7 @@ int dlc_ghost_init(void)
 
 	ret = dlc_ghost_build();
 	if (ret) {
-		pr_err("[droid_lkm_vendor] ghost: init_task not found\n");
+		pr_err("[E] [droid_lkm_vendor] ghost: init_task not found\n");
 		return ret;
 	}
 
@@ -305,7 +342,7 @@ int dlc_ghost_init(void)
 
 	dlc_module_address = (typeof(dlc_module_address))dlc_vendor_syms.module_address;
 	if (!dlc_module_address) {
-		pr_err("[droid_lkm_vendor] ghost: __module_address not found\n");
+		pr_err("[E] [droid_lkm_vendor] ghost: __module_address not found\n");
 		dlc_ghost_ready = false;
 		return -ENOENT;
 	}
@@ -323,7 +360,7 @@ int dlc_ghost_init(void)
 		memset(&probe, 0, sizeof(probe));
 		if (!hk_inline_probe("find_task_by_vpid", &probe) &&
 		    probe.state != HK_INLINE_PLAIN) {
-			pr_err("[droid_lkm_vendor] ghost: find_task_by_vpid entry state %d (%s) target 0x%lx, inline hook refused\n",
+			pr_err("[E] [droid_lkm_vendor] ghost: find_task_by_vpid entry state %d (%s) target 0x%lx, inline hook refused\n",
 			       probe.state, probe.reason ? probe.reason : "?",
 			       probe.target);
 			dlc_ghost_ready = false;
@@ -333,13 +370,13 @@ int dlc_ghost_init(void)
 
 	ret = ds_hook_install(&dlc_ftbv_hook, "find_task_by_vpid", "dlc_ftbv_wrap");
 	if (ret) {
-		pr_err("[droid_lkm_vendor] ghost: hook find_task_by_vpid failed %d\n", ret);
+		pr_err("[E] [droid_lkm_vendor] ghost: hook find_task_by_vpid failed %d\n", ret);
 		dlc_ghost_ready = false;
 		return ret;
 	}
 	smp_wmb();
 	WRITE_ONCE(dlc_ftbv_orig, (typeof(dlc_ftbv_orig))dlc_ftbv_hook.orig);
-	pr_info("[droid_lkm_vendor] ghost: find_task_by_vpid hooked, match=%s\n",
+	pr_info("[I] [droid_lkm_vendor] ghost: find_task_by_vpid hooked, match=%s\n",
 		dlc_ghost_match ? dlc_ghost_match : "");
 	return 0;
 }

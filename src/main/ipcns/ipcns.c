@@ -492,6 +492,11 @@ static bool droid_lkm_ipcns_ids_used(struct ipc_namespace *ns)
 	return false;
 }
 
+bool droid_lkm_ipcns_ready(void)
+{
+	return droid_lkm_ipcns_host != NULL;
+}
+
 bool droid_lkm_ipcns_busy(void)
 {
 	struct droid_lkm_ipcns_entry *e;

@@ -9,5 +9,7 @@
 
 int droid_lkm_status_init(void);
 void droid_lkm_status_exit(void);
+bool droid_lkm_status_ready(void);
+bool droid_lkm_status_can_insert_pos(void);
 
 #endif

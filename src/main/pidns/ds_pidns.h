@@ -51,6 +51,9 @@ bool droid_lkm_pidns_is_ours(struct pid_namespace *ns);
 struct pid_namespace *droid_lkm_pidns_task_for_children(struct task_struct *task);
 
 bool droid_lkm_pidns_busy(void);
+bool droid_lkm_pidns_ready(void);
+const char *droid_lkm_pidns_impl_name(void);
+const char *droid_lkm_pidns_backends(void);
 
 int droid_lkm_pidns_reboot(struct pid_namespace *ns, int cmd);
 

@@ -1,0 +1,162 @@
+.runtime-meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--mdui-color-outline));
+  flex-shrink: 0;
+}
+
+.status-dot.ok {
+  background: rgb(var(--mdui-color-primary));
+}
+
+.stage-track {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.stage-step {
+  background: rgb(var(--mdui-color-surface-container));
+  border-radius: var(--ph-shape-medium);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.stage-step.done {
+  background: color-mix(
+    in srgb,
+    rgb(var(--mdui-color-primary-container)) 65%,
+    rgb(var(--mdui-color-surface-container))
+  );
+}
+
+.stage-step.warn {
+  background: color-mix(
+    in srgb,
+    var(--ph-warning-container) 75%,
+    rgb(var(--mdui-color-surface-container))
+  );
+}
+
+.stage-step.fail {
+  background: color-mix(
+    in srgb,
+    rgb(var(--mdui-color-error-container)) 75%,
+    rgb(var(--mdui-color-surface-container))
+  );
+}
+
+.stage-bar {
+  height: 4px;
+  border-radius: var(--ph-shape-full);
+  background: rgb(var(--mdui-color-surface-container-highest));
+}
+
+.stage-step.done .stage-bar {
+  background: rgb(var(--mdui-color-primary));
+}
+
+.stage-step.warn .stage-bar {
+  background: var(--ph-warning);
+}
+
+.stage-step.fail .stage-bar {
+  background: rgb(var(--mdui-color-error));
+}
+
+.stage-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-val {
+  font-size: 11px;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subsys-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px;
+}
+
+.subsys-row {
+  background: rgb(var(--mdui-color-surface-container));
+  border-radius: var(--ph-shape-medium);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subsys-left {
+  min-width: 0;
+  flex: 1;
+}
+
+.subsys-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.subsys-sub {
+  font-size: 12px;
+  color: rgb(var(--mdui-color-on-surface-variant));
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-strip {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, rgb(var(--mdui-color-outline-variant)) 45%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.metric-pill {
+  background: rgb(var(--mdui-color-surface-container-high));
+  border-radius: var(--ph-shape-small);
+  padding: 6px 10px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metric-k {
+  color: rgb(var(--mdui-color-on-surface-variant));
+}
+
+.metric-v {
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (max-width: 600px) {
+  .stage-track {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
