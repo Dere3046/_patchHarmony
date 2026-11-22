@@ -672,8 +672,9 @@ static int droid_lkm_nsproxy_release_hooks_install(void)
 	 * not critical: a kernel that calls exit_task_namespaces() still gets the
 	 * cleanup from the hook above, this one only covers the inlined case
 	 */
-	ret = ds_hook_install(&droid_lkm_do_exit_hook, "do_exit",
-			      "droid_lkm_do_exit_wrap");
+	ret = ds_hook_install_guard(&droid_lkm_do_exit_hook, "do_exit",
+				    "droid_lkm_do_exit_wrap",
+				    HK_REDIR_GUARD_CALLER);
 	if (ret) {
 		droid_lkm_warn("do_exit hook failed: %d, cleanup stays on "
 			       "exit_task_namespaces only\n", ret);

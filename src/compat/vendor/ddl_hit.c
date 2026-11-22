@@ -55,6 +55,8 @@ int dlc_ddl_hit_init(void)
 		pr_warn("[W] [droid_lkm_vendor] ddl: entry state %d (%s), text route skipped\n",
 			probe.state, probe.reason ? probe.reason : "?");
 	else {
+		memset(&dlc_ddl_hook, 0, sizeof(dlc_ddl_hook));
+		dlc_ddl_hook.ret_mode = HK_INLINE_RET_X17;
 		ret = hk_redir_install(&dlc_ddl_hook, "update_ddl_hit_history",
 				       "dlc_ddl_update_wrap", HK_REDIR_TEXT);
 		if (!ret) {
@@ -65,6 +67,8 @@ int dlc_ddl_hit_init(void)
 			ret);
 	}
 
+	memset(&dlc_ddl_hook, 0, sizeof(dlc_ddl_hook));
+	dlc_ddl_hook.adjust = hk_kprobe_adjust_pad;
 	ret = hk_redir_install_at(&dlc_ddl_hook,
 				  (unsigned long)dlc_vendor_syms.ddl_update,
 				  (unsigned long)dlc_ddl_update_wrap,

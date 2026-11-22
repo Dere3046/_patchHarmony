@@ -42,6 +42,8 @@ const char *ds_hook_mode_name(void);
 
 /* a slot that refuses the write falls through to the function routes */
 int ds_hook_install(struct ds_hook *h, const char *sym, const char *wrap);
+int ds_hook_install_guard(struct ds_hook *h, const char *sym, const char *wrap,
+			  enum hk_redir_guard guard);
 int ds_hook_install_text(struct ds_hook *h, const char *sym, const char *wrap);
 int ds_hook_install_kprobe(struct ds_hook *h, const char *sym,
 			   const char *wrap);
