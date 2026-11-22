@@ -1,5 +1,7 @@
 # droid_lkm
 
+English | [中文](README_zh.md)
+
 Out-of-tree kernel modules that provide missing namespace and IPC features
 (`CONFIG_SYSVIPC`, `CONFIG_POSIX_MQUEUE`, `CONFIG_PID_NS`, `CONFIG_IPC_NS`)
 for stock GKI kernels. It enables container runtimes like Droidspaces without
@@ -21,17 +23,12 @@ compatibility.
 
 ## Contributors
 
-- [XGH2333](https://github.com/XGH2333) (O3 CPU support)
+See [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ## Credits
 
-- [Droidspaces](https://github.com/ravindu644/Droidspaces-OSS) by ravindu644 — target container runtime
-- [KMSDK](https://github.com/Dere3046/KMSDK) — SDK for library fetching and vendoring
-- [KallRecon](https://github.com/Dere3046/KallRecon) — runtime kernel symbol resolution
-- [Type_info](https://github.com/Dere3046/Type_info) — runtime struct layout reconstruction
-- [KernCall](https://github.com/Dere3046/KernCall) — syscall table patching
-- [HooKern](https://github.com/Dere3046/HooKern) — inline hook and kprobe engine
+See [CREDITS.md](CREDITS.md).
 
 ## License
 
-GPL-2.0
+[GPL-2.0](LICENSE)
