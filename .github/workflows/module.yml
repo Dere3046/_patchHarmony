@@ -65,6 +65,8 @@ jobs:
     needs: build
     if: always() && needs.build.result != 'cancelled'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -119,17 +121,41 @@ jobs:
           fi
 
       - name: Package all flavors
+        id: pkg
         run: |
           args=""
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             ver=${GITHUB_REF_NAME#v}
             args="-Pversion=$ver"
+          else
+            ver=$(sed -n 's/^version=//p' module/module.prop | head -n 1 | tr -d '\r')
           fi
           gradle --no-daemon packageAllFlavors $args
           ls -lh build/dist
+          echo "standard=build/dist/phDroid-${ver}.zip" >> "$GITHUB_OUTPUT"
+          echo "native=build/dist/phDroid-${ver}-native.zip" >> "$GITHUB_OUTPUT"
+          echo "main_native=build/dist/phDroid-${ver}-main-native.zip" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: phDroid-modules
-          path: build/dist/*.zip
+          name: phDroid-standard
+          path: ${{ steps.pkg.outputs.standard }}
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phDroid-native
+          path: ${{ steps.pkg.outputs.native }}
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phDroid-main-native
+          path: ${{ steps.pkg.outputs.main_native }}
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build/dist/*.zip
+          generate_release_notes: true
