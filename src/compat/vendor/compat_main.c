@@ -44,15 +44,17 @@ static int __init droid_lkm_vendor_init(void)
 	// the fixup is why this module exists
 	// a silent miss leaves vendor callers with NULL
 	ret = dlc_ghost_init();
-
-	/* vendor ddl history bounds */
-	(void)dlc_ddl_hit_init();
 	if (ret) {
 		pr_err("[E] [droid_lkm_vendor] ghost: refusing to load, hook not installed (%d); ghost=0 turns the fixup off\n",
 		       ret);
+		ds_hook_exit();
 		hk_exit();
+		ds_compat_layout_exit();
 		return ret;
 	}
+
+	/* vendor ddl history bounds */
+	(void)dlc_ddl_hit_init();
 	pr_info("[I] [droid_lkm_vendor] ready\n");
 	return 0;
 }
@@ -63,6 +65,7 @@ static void __exit droid_lkm_vendor_exit(void)
 	dlc_ghost_exit();
 	ds_hook_exit();
 	hk_exit();
+	ds_compat_layout_exit();
 }
 
 module_init(droid_lkm_vendor_init);

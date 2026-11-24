@@ -74,6 +74,7 @@ int ds_compat_bind(const struct ds_compat_sym *tab, unsigned int count);
 int ds_compat_write(void *dst, unsigned long val);
 
 bool ds_compat_layout_init(struct ds_compat_layout *l);
+void ds_compat_layout_exit(void);
 void ds_compat_layout_fallback(struct ds_compat_layout *l);
 void ds_compat_layout_force_build(struct ds_compat_layout *l);
 const char *ds_compat_state_name(u8 state);

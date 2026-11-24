@@ -184,7 +184,7 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 
 	ds_compat_layout_unverified(l);
 
-	if (ti_init(&res)) {
+	if (!ti_ready() && ti_init(&res)) {
 		ds_compat_warn("layout: type info refused to start, every offset is refused\n");
 		return false;
 	}
@@ -257,6 +257,11 @@ bool ds_compat_layout_init(struct ds_compat_layout *l)
 	}
 
 	return !missing;
+}
+
+void ds_compat_layout_exit(void)
+{
+	ti_exit();
 }
 
 void ds_compat_layout_fallback(struct ds_compat_layout *l)

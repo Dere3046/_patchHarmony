@@ -92,6 +92,7 @@ enum droid_lkm_type_id {
 struct seq_file;
 
 void droid_lkm_layout_init(void);
+void droid_lkm_layout_exit(void);
 void droid_lkm_layout_report(void);
 bool droid_lkm_layout_trusted(void);
 void droid_lkm_layout_show(struct seq_file *m);

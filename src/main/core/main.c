@@ -128,17 +128,17 @@ static int __init droid_lkm_init(void)
 
 	ret = droid_lkm_caps_init();
 	if (ret)
-		return ret;
+		goto err_layout;
 	droid_lkm_caps_report();
 
 	ret = droid_lkm_munmap_init();
 	if (ret)
-		return ret;
+		goto err_layout;
 
 	ret = hk_init(&droid_lkm_hk_cfg);
 	if (ret) {
 		droid_lkm_err("hk_init failed: %d\n", ret);
-		return ret;
+		goto err_layout;
 	}
 	/*
 	 * the policy has to reach the engine before the first hook: the route and
@@ -229,6 +229,8 @@ err_pidns:
 err_hk:
 	ds_hook_exit();
 	hk_exit();
+err_layout:
+	droid_lkm_layout_exit();
 	return ret;
 }
 
@@ -252,6 +254,7 @@ static void __exit droid_lkm_exit(void)
 	droid_lkm_keepalive_release();
 	ds_hook_exit();
 	hk_exit();
+	droid_lkm_layout_exit();
 	droid_lkm_info("unloaded\n");
 }
 

@@ -346,6 +346,11 @@ void droid_lkm_layout_init(void)
 		droid_lkm_warn("layout: kernel owned fields are not verified, namespace features stay off\n");
 }
 
+void droid_lkm_layout_exit(void)
+{
+	ds_compat_layout_exit();
+}
+
 bool droid_lkm_layout_trusted(void)
 {
 	return droid_lkm_layout_trusted_flag;
