@@ -717,8 +717,11 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 					     struct user_namespace *user_ns,
 					     struct fs_struct *fs)
 {
+	bool kernel_ipc = droid_lkm_ipcns_is_kernel_owned();
 	bool want_pid = flags & CLONE_NEWPID;
-	bool want_ipc = flags & CLONE_NEWIPC;
+	bool want_ipc = !kernel_ipc && (flags & CLONE_NEWIPC);
+	unsigned long mask = kernel_ipc ? CLONE_NEWPID :
+					  (CLONE_NEWPID | CLONE_NEWIPC);
 	struct pid_namespace *new_pid = NULL;
 	struct ipc_namespace *new_ipc = NULL;
 	struct nsproxy *nsp;
@@ -765,8 +768,7 @@ __nocfi noinline struct nsproxy *droid_lkm_cnn_wrap(unsigned long flags,
 		}
 	}
 
-	nsp = droid_lkm_cnn_call(flags & ~(CLONE_NEWPID | CLONE_NEWIPC), tsk, user_ns,
-			  fs);
+	nsp = droid_lkm_cnn_call(flags & ~mask, tsk, user_ns, fs);
 	if (IS_ERR(nsp)) {
 		droid_lkm_warn("nsproxy: kernel create failed: %ld\n", PTR_ERR(nsp));
 		droid_lkm_pidns_put(new_pid);
@@ -799,9 +801,12 @@ static __nocfi noinline int droid_lkm_cn_call(unsigned long flags,
 
 __nocfi noinline int droid_lkm_cn_wrap(unsigned long flags, struct task_struct *tsk)
 {
+	bool kernel_ipc = droid_lkm_ipcns_is_kernel_owned();
 	bool want_pid = flags & CLONE_NEWPID;
-	bool want_ipc = flags & CLONE_NEWIPC;
-	unsigned long inner = flags & ~(CLONE_NEWPID | CLONE_NEWIPC);
+	bool want_ipc = !kernel_ipc && (flags & CLONE_NEWIPC);
+	unsigned long mask = kernel_ipc ? CLONE_NEWPID :
+					  (CLONE_NEWPID | CLONE_NEWIPC);
+	unsigned long inner = flags & ~mask;
 	struct pid_namespace *new_pid = NULL;
 	struct ipc_namespace *new_ipc = NULL;
 	struct nsproxy *priv;
@@ -961,11 +966,14 @@ static __nocfi noinline long droid_lkm_unshare_legacy(const struct pt_regs *regs
 {
 	struct pt_regs tmp = *regs;
 	unsigned long flags = tmp.regs[0];
+	bool kernel_ipc = droid_lkm_ipcns_is_kernel_owned();
 	bool want_pid = flags & CLONE_NEWPID;
-	bool want_ipc = flags & CLONE_NEWIPC;
+	bool want_ipc = !kernel_ipc && (flags & CLONE_NEWIPC);
+	unsigned long mask = kernel_ipc ? CLONE_NEWPID :
+					  (CLONE_NEWPID | CLONE_NEWIPC);
 	long ret;
 
-	tmp.regs[0] = flags & ~(CLONE_NEWPID | CLONE_NEWIPC);
+	tmp.regs[0] = flags & ~mask;
 	if (!(tmp.regs[0] & DROID_LKM_NS_FLAGS))
 		tmp.regs[0] |= CLONE_NEWUTS;
 
@@ -975,7 +983,7 @@ static __nocfi noinline long droid_lkm_unshare_legacy(const struct pt_regs *regs
 
 	if (flags & (CLONE_NEWIPC | CLONE_SYSVSEM))
 		droid_lkm_exit_sem(current);
-	if (want_ipc)
+	if (flags & CLONE_NEWIPC)
 		droid_lkm_exit_shm(current);
 
 	if (want_ipc) {
@@ -1106,7 +1114,8 @@ __nocfi noinline int droid_lkm_clone_ctx_enter(unsigned long flags,
 				      struct droid_lkm_clone_ctx *ctx)
 {
 	bool want_pid = flags & CLONE_NEWPID;
-	bool want_ipc = flags & CLONE_NEWIPC;
+	bool want_ipc = !droid_lkm_ipcns_is_kernel_owned() &&
+			(flags & CLONE_NEWIPC);
 	struct pid_namespace *new_pid = NULL;
 	struct ipc_namespace *new_ipc = NULL;
 
@@ -1188,9 +1197,15 @@ static int droid_lkm_clone_ns_check(unsigned long flags)
 	return 0;
 }
 
+static unsigned long droid_lkm_clone_ns_mask(void)
+{
+	return droid_lkm_ipcns_is_kernel_owned() ? CLONE_NEWPID :
+						   (CLONE_NEWPID | CLONE_NEWIPC);
+}
+
 static __nocfi noinline bool droid_lkm_clone_ns_ready(unsigned long flags)
 {
-	return (flags & (CLONE_NEWPID | CLONE_NEWIPC)) && droid_lkm_cnn_hooked &&
+	return (flags & droid_lkm_clone_ns_mask()) && droid_lkm_cnn_hooked &&
 	       droid_lkm_ks.switch_task_namespaces && droid_lkm_gate_allow();
 }
 
@@ -1212,7 +1227,7 @@ static __nocfi noinline long droid_lkm_sys_clone(const struct pt_regs *regs)
 		return ret;
 
 	tmp = *regs;
-	tmp.regs[0] = flags & ~(CLONE_NEWPID | CLONE_NEWIPC);
+	tmp.regs[0] = flags & ~droid_lkm_clone_ns_mask();
 	ret = droid_lkm_orig_clone(&tmp);
 
 	droid_lkm_clone_ctx_leave(&ctx);
@@ -1249,7 +1264,7 @@ static __nocfi noinline long droid_lkm_sys_clone3(const struct pt_regs *regs)
 		return ret;
 
 	ua2 = ua;
-	ua2.flags = flags & ~(CLONE_NEWPID | CLONE_NEWIPC);
+	ua2.flags = flags & ~droid_lkm_clone_ns_mask();
 	if (copy_to_user(uargs, &ua2, n)) {
 		droid_lkm_clone_ctx_leave(&ctx);
 		return -EFAULT;

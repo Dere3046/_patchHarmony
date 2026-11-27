@@ -19,11 +19,13 @@
 #include <linux/idr.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/workqueue.h>
 
 #include "ds.h"
 #include "ds_caps.h"
 #include "ds_shapes.h"
 #include "ds_ksym.h"
+#include "ds_hook.h"
 #include "ds_ipcns.h"
 #include "ipc_sysctl.h"
 #include "ipc_mqueue_compat.h"
@@ -49,7 +51,8 @@ static inline refcount_t *droid_lkm_ipcns_refcount(struct ipc_namespace *ns)
 struct droid_lkm_ipcns_entry {
 	struct list_head node;
 	struct ipc_namespace *ns;
-	/* the kernel allocated it, so the kernel frees it: this module only tracks it */
+	struct work_struct retire_work;
+	// holds one ref to retire module state before kernel free
 	bool kernel_owned;
 };
 
@@ -62,9 +65,36 @@ static struct ipc_namespace *droid_lkm_ipcns_orig;
 /* set when the running kernel owns ipc namespaces, see the classification in ds_caps.c */
 static bool droid_lkm_ipcns_kernel_owned;
 
+static struct workqueue_struct *droid_lkm_ipcns_wq;
+static struct ds_hook droid_lkm_copy_ipcs_hook;
+static struct ds_hook droid_lkm_put_ipcns_hook;
+static struct ipc_namespace *(*droid_lkm_copy_ipcs_orig)(
+	unsigned long flags, struct user_namespace *user_ns,
+	struct ipc_namespace *old_ns);
+static void (*droid_lkm_put_ipcns_orig)(struct ipc_namespace *ns);
+
 static const struct proc_ns_operations *droid_lkm_ipcns_neutral_ops;
 
 static struct nsproxy *droid_lkm_init_nsproxy;
+
+bool droid_lkm_ipcns_is_kernel_owned(void)
+{
+	return droid_lkm_ipcns_kernel_owned;
+}
+
+static __nocfi noinline void droid_lkm_put_ipcns_call(struct ipc_namespace *ns)
+{
+	if (!ns)
+		return;
+	if (droid_lkm_put_ipcns_hook.live && droid_lkm_put_ipcns_orig) {
+		ds_hook_enter(&droid_lkm_put_ipcns_hook);
+		droid_lkm_put_ipcns_orig(ns);
+		ds_hook_leave(&droid_lkm_put_ipcns_hook);
+		return;
+	}
+	if (droid_lkm_ks.put_ipc_ns)
+		droid_lkm_ks.put_ipc_ns(ns);
+}
 
 /*
  * offsets follow the allocator: the module's own namespaces carry the build
@@ -123,15 +153,156 @@ static void droid_lkm_ipcns_destroy_ids(struct ipc_namespace *ns)
 {
 	int i;
 
-	if (droid_lkm_ipcns_mq_mnt(ns)) {
+	if (droid_lkm_mqueue_ready() && droid_lkm_ipcns_mq_mnt(ns)) {
 		droid_lkm_retire_mq_sysctls(ns);
 		droid_lkm_mq_clear_sbinfo(ns);
 		droid_lkm_mq_put_mnt(ns);
 		droid_lkm_ipcns_set_mq_mnt(ns, NULL);
 	}
 
-	for (i = 0; i < DROID_LKM_IPC_IDS_COUNT; i++)
-		idr_destroy(&droid_lkm_ipcns_ids(ns, i)->ipcs_idr);
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
+		for (i = 0; i < DROID_LKM_IPC_IDS_COUNT; i++)
+			idr_destroy(&droid_lkm_ipcns_ids(ns, i)->ipcs_idr);
+	}
+}
+
+static void droid_lkm_ipcns_retire_kernel(struct ipc_namespace *ns)
+{
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
+		ds_sem_exit_ns(ns);
+		ds_msg_exit_ns(ns);
+		ds_shm_exit_ns(ns);
+	}
+	droid_lkm_ipc_sysctls_retire(ns);
+	droid_lkm_ipcns_destroy_ids(ns);
+}
+
+static void droid_lkm_ipcns_retire_work(struct work_struct *work)
+{
+	struct droid_lkm_ipcns_entry *e =
+		container_of(work, struct droid_lkm_ipcns_entry, retire_work);
+
+	droid_lkm_ipcns_retire_kernel(e->ns);
+	droid_lkm_put_ipcns_call(e->ns);
+	kfree(e);
+}
+
+static int droid_lkm_ipcns_adopt_kernel(struct ipc_namespace *ns)
+{
+	struct droid_lkm_ipcns_entry *e;
+	int err;
+
+	if (droid_lkm_caps.sysvipc.owner != DROID_LKM_MODULE &&
+	    !droid_lkm_mqueue_ready())
+		return 0;
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL);
+	if (!e)
+		return -ENOMEM;
+
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
+		err = msg_init_ns(ns);
+		if (err)
+			goto out_free;
+		sem_init_ns(ns);
+		shm_init_ns(ns);
+	}
+
+	if (droid_lkm_mqueue_ready()) {
+		err = droid_lkm_mq_init_ns(ns);
+		if (err)
+			goto out_retire;
+		if (!droid_lkm_setup_mq_sysctls(ns)) {
+			droid_lkm_warn("ipcns %p: mq sysctls required but registration failed\n",
+				       ns);
+			err = -ENOMEM;
+			goto out_retire;
+		}
+	}
+
+	if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE &&
+	    droid_lkm_ipc_sysctls_ok() && !droid_lkm_ipc_sysctls_setup(ns)) {
+		droid_lkm_warn("ipcns %p: sysctls required but registration failed\n",
+			       ns);
+		err = -ENOMEM;
+		goto out_retire;
+	}
+
+	refcount_inc(droid_lkm_ipcns_refcount(ns));
+	e->ns = ns;
+	e->kernel_owned = true;
+	INIT_LIST_HEAD(&e->node);
+	INIT_WORK(&e->retire_work, droid_lkm_ipcns_retire_work);
+
+	spin_lock_irq(&droid_lkm_ipcns_lock);
+	list_add_tail(&e->node, &droid_lkm_ipcns_list);
+	spin_unlock_irq(&droid_lkm_ipcns_lock);
+
+	droid_lkm_dbg("ipcns %p kernel created, module state filled in\n", ns);
+	return 0;
+
+out_retire:
+	droid_lkm_ipcns_retire_kernel(ns);
+out_free:
+	kfree(e);
+	return err;
+}
+
+DROID_LKM_ENTRY __nocfi noinline struct ipc_namespace *
+droid_lkm_copy_ipcs_wrap(unsigned long flags, struct user_namespace *user_ns,
+			 struct ipc_namespace *old_ns)
+{
+	struct ipc_namespace *ns;
+	int err;
+
+	ns = droid_lkm_copy_ipcs_orig(flags, user_ns, old_ns);
+	ds_hook_leave(&droid_lkm_copy_ipcs_hook);
+
+	if ((flags & CLONE_NEWIPC) && PTR_ERR(ns) == -ENOSPC &&
+	    droid_lkm_ipcns_wq) {
+		flush_workqueue(droid_lkm_ipcns_wq);
+		ds_hook_enter(&droid_lkm_copy_ipcs_hook);
+		ns = droid_lkm_copy_ipcs_orig(flags, user_ns, old_ns);
+		ds_hook_leave(&droid_lkm_copy_ipcs_hook);
+	}
+
+	if (!(flags & CLONE_NEWIPC) || IS_ERR(ns))
+		return ns;
+
+	err = droid_lkm_ipcns_adopt_kernel(ns);
+	if (err) {
+		droid_lkm_put_ipcns_call(ns);
+		return ERR_PTR(err);
+	}
+	return ns;
+}
+
+DROID_LKM_ENTRY __nocfi noinline void
+droid_lkm_put_ipcns_wrap(struct ipc_namespace *ns)
+{
+	struct droid_lkm_ipcns_entry *iter, *e = NULL;
+	unsigned long flags;
+
+	droid_lkm_put_ipcns_orig(ns);
+	ds_hook_leave(&droid_lkm_put_ipcns_hook);
+
+	if (!ns)
+		return;
+
+	spin_lock_irqsave(&droid_lkm_ipcns_lock, flags);
+	list_for_each_entry(iter, &droid_lkm_ipcns_list, node) {
+		if (iter->kernel_owned && iter->ns == ns) {
+			if (refcount_read(droid_lkm_ipcns_refcount(ns)) == 1) {
+				list_del_init(&iter->node);
+				e = iter;
+			}
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&droid_lkm_ipcns_lock, flags);
+
+	if (e)
+		queue_work(droid_lkm_ipcns_wq, &e->retire_work);
 }
 
 __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
@@ -140,66 +311,9 @@ __nocfi noinline struct ipc_namespace *droid_lkm_ipcns_create(void)
 	struct ipc_namespace *ns;
 	int err;
 
-#ifdef CONFIG_IPC_NS
-	/*
-	 * a kernel that owns ipc namespaces already knows how to build one: it takes
-	 * the ucount, allocates the inum, sets ns->ops and mounts mqueuefs into it,
-	 * and its own free_ipc_ns() releases every bit of that. fabricating the
-	 * object instead leaves it without ucounts and outside the kernel's free
-	 * path, which is why the namespace is asked of the kernel and only the half
-	 * it skips is filled in. that half is SysV, skipped while CONFIG_SYSVIPC is
-	 * off in the trees that need this module
-	 */
-	if (droid_lkm_ipcns_kernel_owned) {
-		if (!droid_lkm_ks.copy_ipcs || !droid_lkm_ks.put_ipc_ns)
-			return ERR_PTR(-EOPNOTSUPP);
-
-		ns = droid_lkm_ks.copy_ipcs(CLONE_NEWIPC, droid_lkm_current_user_ns(),
-					    droid_lkm_ipcns_current());
-		if (IS_ERR(ns))
-			return ns;
-
-		if (droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
-			err = msg_init_ns(ns);
-			if (err)
-				goto out_kernel_ns;
-			sem_init_ns(ns);
-			shm_init_ns(ns);
-		}
-
-		if (droid_lkm_ipc_sysctls_ok() && !droid_lkm_ipc_sysctls_setup(ns)) {
-			droid_lkm_warn("ipcns %p: sysctls required but registration failed\n",
-				       ns);
-			err = -ENOMEM;
-			goto out_kernel_sysctl;
-		}
-
-		e = kzalloc(sizeof(*e), GFP_KERNEL);
-		if (!e) {
-			err = -ENOMEM;
-			goto out_kernel_sysctl;
-		}
-		e->ns = ns;
-		e->kernel_owned = true;
-		INIT_LIST_HEAD(&e->node);
-
-		/* the nsproxy owns this reference, the list only keeps it findable */
-
-		spin_lock_irq(&droid_lkm_ipcns_lock);
-		list_add_tail(&e->node, &droid_lkm_ipcns_list);
-		spin_unlock_irq(&droid_lkm_ipcns_lock);
-
-		droid_lkm_info("ipcns %p the kernel made, sysv=%s filled in\n", ns,
-			       droid_lkm_caps.sysvipc.reason);
-		return ns;
-
-out_kernel_sysctl:
-		droid_lkm_ipc_sysctls_retire(ns);
-out_kernel_ns:
-		droid_lkm_ks.put_ipc_ns(ns);
-		return ERR_PTR(err);
-	}
-#endif
+	// kernel creates via copy_ipcs hook
+	if (droid_lkm_ipcns_kernel_owned)
+		return ERR_PTR(-EOPNOTSUPP);
 
 	ns = kzalloc(sizeof(*ns), GFP_KERNEL_ACCOUNT);
 	if (!ns)
@@ -308,7 +422,7 @@ bool droid_lkm_ipcns_is_ours(struct ipc_namespace *ns)
 
 	spin_lock_irqsave(&droid_lkm_ipcns_lock, flags);
 	list_for_each_entry(e, &droid_lkm_ipcns_list, node) {
-		if (e->ns == ns) {
+		if (e->ns == ns && !e->kernel_owned) {
 			found = true;
 			break;
 		}
@@ -361,8 +475,7 @@ __nocfi noinline void droid_lkm_ipcns_put(struct ipc_namespace *ns)
 
 	/* the kernel frees its own object, its put is the one that runs */
 	if (kernel_owned) {
-		if (droid_lkm_ks.put_ipc_ns)
-			droid_lkm_ks.put_ipc_ns(ns);
+		droid_lkm_put_ipcns_call(ns);
 		return;
 	}
 
@@ -633,7 +746,45 @@ int droid_lkm_ipcns_init(void)
 			       droid_lkm_ipcns_host);
 	}
 
-	droid_lkm_ipc_sysctls_init();
+	if (droid_lkm_caps.sysvipc.owner != DROID_LKM_KERNEL)
+		droid_lkm_ipc_sysctls_init();
+
+	if (droid_lkm_ipcns_kernel_owned &&
+	    droid_lkm_caps.sysvipc.owner == DROID_LKM_MODULE) {
+		int err;
+
+		if (!droid_lkm_ks.copy_ipcs || !droid_lkm_ks.put_ipc_ns) {
+			droid_lkm_err("kernel ipcns hooks missing symbols (copy_ipcs=%p put_ipc_ns=%p)\n",
+				      droid_lkm_ks.copy_ipcs,
+				      droid_lkm_ks.put_ipc_ns);
+			droid_lkm_ipcns_exit();
+			return -ENODATA;
+		}
+		droid_lkm_ipcns_wq =
+			alloc_workqueue("droid_lkm_ipcns", WQ_UNBOUND, 0);
+		if (!droid_lkm_ipcns_wq) {
+			droid_lkm_ipcns_exit();
+			return -ENOMEM;
+		}
+		err = ds_hook_install(&droid_lkm_put_ipcns_hook, "put_ipc_ns",
+				      "droid_lkm_put_ipcns_wrap");
+		if (err) {
+			droid_lkm_err("put_ipc_ns hook failed: %d\n", err);
+			droid_lkm_ipcns_exit();
+			return err;
+		}
+		droid_lkm_put_ipcns_orig =
+			(typeof(droid_lkm_put_ipcns_orig))droid_lkm_put_ipcns_hook.orig;
+		err = ds_hook_install(&droid_lkm_copy_ipcs_hook, "copy_ipcs",
+				      "droid_lkm_copy_ipcs_wrap");
+		if (err) {
+			droid_lkm_err("copy_ipcs hook failed: %d\n", err);
+			droid_lkm_ipcns_exit();
+			return err;
+		}
+		droid_lkm_copy_ipcs_orig =
+			(typeof(droid_lkm_copy_ipcs_orig))droid_lkm_copy_ipcs_hook.orig;
+	}
 	return 0;
 }
 
@@ -645,6 +796,20 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 
 	if (!droid_lkm_layout_trusted())
 		return;
+
+	if (droid_lkm_copy_ipcs_hook.live) {
+		ds_hook_remove(&droid_lkm_copy_ipcs_hook);
+		droid_lkm_copy_ipcs_orig = NULL;
+	}
+	if (droid_lkm_put_ipcns_hook.live) {
+		ds_hook_remove(&droid_lkm_put_ipcns_hook);
+		droid_lkm_put_ipcns_orig = NULL;
+	}
+	if (droid_lkm_ipcns_wq) {
+		flush_workqueue(droid_lkm_ipcns_wq);
+		destroy_workqueue(droid_lkm_ipcns_wq);
+		droid_lkm_ipcns_wq = NULL;
+	}
 
 	droid_lkm_ipc_proc_exit();
 
@@ -669,18 +834,14 @@ __nocfi noinline void droid_lkm_ipcns_exit(void)
 		list_del_init(&e->node);
 		spin_unlock_irqrestore(&droid_lkm_ipcns_lock, flags);
 
-		droid_lkm_ipc_sysctls_retire(e->ns);
-
-		/*
-		 * the kernel allocated this one and the kernel frees it, sysv ids
-		 * included, so the only thing to release here is the reference the
-		 * list holds
-		 */
 		if (e->kernel_owned) {
-			droid_lkm_ks.put_ipc_ns(e->ns);
+			droid_lkm_ipcns_retire_kernel(e->ns);
+			droid_lkm_put_ipcns_call(e->ns);
 			kfree(e);
 			continue;
 		}
+
+		droid_lkm_ipc_sysctls_retire(e->ns);
 
 		if (e == &droid_lkm_ipcns_init_entry || droid_lkm_ipcns_is_host(e->ns)) {
 			

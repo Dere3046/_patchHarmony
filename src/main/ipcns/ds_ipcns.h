@@ -25,6 +25,12 @@ struct ipc_namespace *droid_lkm_ipcns_get(struct ipc_namespace *ns);
 void droid_lkm_ipcns_put(struct ipc_namespace *ns);
 
 bool droid_lkm_ipcns_is_ours(struct ipc_namespace *ns);
+bool droid_lkm_ipcns_is_kernel_owned(void);
+
+struct ipc_namespace *droid_lkm_copy_ipcs_wrap(unsigned long flags,
+					       struct user_namespace *user_ns,
+					       struct ipc_namespace *old_ns);
+void droid_lkm_put_ipcns_wrap(struct ipc_namespace *ns);
 
 
 bool droid_lkm_ipcns_is_host(struct ipc_namespace *ns);

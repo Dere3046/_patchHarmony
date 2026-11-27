@@ -68,7 +68,7 @@ const char *ds_hook_mode_name(void)
 }
 
 // every install lands here so the load report can name the ones that failed
-#define DS_HOOK_RECORDS 8
+#define DS_HOOK_RECORDS 16
 
 static struct ds_hook *ds_hook_list[DS_HOOK_RECORDS];
 static unsigned int ds_hook_count;
