@@ -264,4 +264,4 @@ module_exit(droid_lkm_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Droidspaces kernel feature shim for stock GKI");
 MODULE_AUTHOR("dere3046");
-MODULE_VERSION("0.1.0");
+MODULE_VERSION("2.0.4");
